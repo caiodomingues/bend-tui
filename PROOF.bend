@@ -51,27 +51,21 @@ def Laws.render_cols(v, w, h):
   Laws.fit_rows_cols(h, w, U.draw(v, w, h))
 
 # diff_self: every row compares equal to itself (reflexivity of the
-# comparisons, from U32.cmp up), so every row's diff is "", and a join
-# of empty strings is empty. AllEmpty carries the second fact.
+# comparisons, from U32.cmp and Bool.cmp up), so every row's diff is
+# "", and a concat of empty strings is empty. AllEmpty carries the
+# second fact.
 
 
 def u32_eq_refl(+x: U32) -> {U32.is_eq(x, x) == True{} : Bool}:
   %Equal.sym(Cmp, U32.cmp(x, x), EQ{}, S.u32_cmp_refl(x)) : {Cmp.is_eq(_) == True{} : Bool}
   {==}
 
-def bool_same_refl(+b: Bool) -> {U.Bool.same(b, b) == True{} : Bool}:
-  match b:
-    case True{}:
-      {==}
-    case False{}:
-      {==}
-
 def style_eq_refl(+s: U.Style) -> {U.Style.is_eq(s, s) == True{} : Bool}:
   match s:
     case U.Style{f, b, o}:
-      %Equal.sym(Bool, U32.is_eq(f, f), True{}, u32_eq_refl(f)) : {Bool.and(_, Bool.and(U32.is_eq(b, b), U.Bool.same(o, o))) == True{} : Bool}
-      %Equal.sym(Bool, U32.is_eq(b, b), True{}, u32_eq_refl(b)) : {Bool.and(True{}, Bool.and(_, U.Bool.same(o, o))) == True{} : Bool}
-      %Equal.sym(Bool, U.Bool.same(o, o), True{}, bool_same_refl(o)) : {Bool.and(True{}, Bool.and(True{}, _)) == True{} : Bool}
+      %Equal.sym(Bool, U32.is_eq(f, f), True{}, u32_eq_refl(f)) : {Bool.and(_, Bool.and(U32.is_eq(b, b), Cmp.is_eq(Bool.cmp(o, o)))) == True{} : Bool}
+      %Equal.sym(Bool, U32.is_eq(b, b), True{}, u32_eq_refl(b)) : {Bool.and(True{}, Bool.and(_, Cmp.is_eq(Bool.cmp(o, o)))) == True{} : Bool}
+      %Equal.sym(Cmp, Bool.cmp(o, o), EQ{}, S.bool_cmp_refl(o)) : {Bool.and(True{}, Bool.and(True{}, Cmp.is_eq(_))) == True{} : Bool}
       {==}
 
 def cell_eq_refl(+c: U.Cell) -> {U.Cell.is_eq(c, c) == True{} : Bool}:
@@ -109,24 +103,15 @@ def diff_go_self(+f: List<&2, List<&2, U.Cell>>, +y: U32) -> AllEmpty(U.Frame.di
     case n <> t:
       (diff_row_self(n, y), diff_go_self(t, (y + 1 : U32)))
 
-def join_go_empty(+t: List<&2, String>, +h: String, eh: {h == "" : String}, et: AllEmpty(t)) -> {String.join.go(t, h, "") == "" : String}:
-  match t:
-    case Nil{}:
-      %eh : {h == _ : String}
-      {==}
-    case h2 <> t2:
-      (e2, rest) = et
-      %Equal.sym(String, String.join.go(t2, h2, ""), "", join_go_empty(t2, h2, e2, rest)) : {String.append(h, String.append("", _)) == "" : String}
-      %Equal.sym(String, h, "", eh) : {String.append(_, "") == "" : String}
-      {==}
-
-def join_empty(+xs: List<&2, String>, e: AllEmpty(xs)) -> {String.join(xs, "") == "" : String}:
+def concat_empty(+xs: List<&2, String>, e: AllEmpty(xs)) -> {String.concat(xs) == "" : String}:
   match xs:
     case Nil{}:
       {==}
     case h <> t:
       (eh, et) = e
-      join_go_empty(t, h, eh, et)
+      %Equal.sym(String, String.concat(t), "", concat_empty(t, et)) : {String.append(h, _) == "" : String}
+      %Equal.sym(String, h, "", eh) : {String.append(_, "") == "" : String}
+      {==}
 
 def Laws.diff_self(f):
-  join_empty(U.Frame.diff.go(f, f, 1), diff_go_self(f, 1))
+  concat_empty(U.Frame.diff.go(f, f, 1), diff_go_self(f, 1))

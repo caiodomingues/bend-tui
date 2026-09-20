@@ -38,7 +38,7 @@ def panel(title: String, +n: Nat, +period: Nat, +color: U32) -> U.View:
 
 def view.at(+n: Nat) -> U.View:
   U.Below{
-    U.Beside{panel("cpu", n, 40n, 42), U.Beside{panel("mem", n, 90n, 214), panel("disk", n, 200n, 203), 26n}, 26n},
+    U.Split{panel("cpu", n, 40n, 42), U.Split{panel("mem", n, 90n, 214), panel("disk", n, 200n, 203), 1n, 2n}, 1n, 3n},
     U.Boxed{"log", U.Lines{U.Style.fg(245), ["turn " ++ Nat.show(n), "Esc quits"]}},
     4n}
 
@@ -50,7 +50,8 @@ def main() -> IO(Unit):
 ```
 
 That is `demos/dashboard.bend`. `demos/todo.bend` is a list with an input:
-type and Enter to add, Up/Down, Tab to mark done, Delete, Esc.
+type and Enter to add, Up/Down, Tab to mark done, Delete, Esc. Ctrl-C quits
+any `Tui.run`.
 
 ## API
 
@@ -63,14 +64,17 @@ type and Enter to add, Up/Down, Tab to mark done, Delete, Esc.
 | `Fill{c}` | the whole area with one cell |
 | `Above{top, bottom, rows}` / `Below{top, bottom, rows}` | a split: `rows` for the top, or for the bottom; the other gets the rest |
 | `Beside{left, right, cols}` / `After{left, right, cols}` | a split: `cols` for the left, or for the right |
+| `Split{left, right, num, den}` / `Stack{top, bottom, num, den}` | a split by ratio: `w * num / den` columns for the left, `h * num / den` rows for the top |
 | `Boxed{title, child}` | a border with the title on it; the child inside |
-| `Menu{items, sel, top}` | a row per item from item `top`; item `sel` inverse |
+| `Menu{items, sel}` | a row per item, item `sel` inverse, scrolled so that it is on screen |
 | `Input{text, cursor}` | one row; the cell at `cursor` inverse |
 | `Progress{done, total, st}` | one row, filled `done / total` of the width |
 
 A widget's rows are cut or padded to the area it gets; nothing overflows.
-`Style{fg, bg, bold}` uses 256-color codes, `256` for the terminal's default;
-`Style.plain()`, `Style.fg(c)`, `Style.bold(c)`, `Style.inverse()`.
+A control character in a string (below 32, or 127) is drawn as a blank, so
+text cannot move the cursor or start an escape. `Style{fg, bg, bold}` uses
+256-color codes, `256` for the terminal's default; `Style.plain()`,
+`Style.fg(c)`, `Style.bold(c)`, `Style.inverse()`.
 
 **Frames**: `render(v, w, h)` gives `List<List<Cell>>`, `h` rows of `w`;
 `Frame.show(f)` is the string that paints it all, `Frame.diff(next, prev)` the
@@ -78,9 +82,12 @@ string that paints what changed, row by row.
 
 **The loop**: `Tui.run(~M, ~Tui{view, update}, m0, ms)` with
 `view: M -> View` and `update: List<Key> -> M -> Maybe<M>`. Each turn: the
-terminal's size, `view` of the state rendered to it, the diff written, the
-keys read within `ms` (an empty list on a timeout: a tick), `update`, which
-answers the next state or `None` to quit. `Tui.fold(~M, ~step, ks, Some{m})`
+terminal's size, `view` of the state rendered to it, the diff written (the
+whole frame after a resize), the keys read within `ms` (an empty list on a
+timeout: a tick), `update`, which answers the next state or `None` to quit;
+Ctrl-C quits before `update` sees it. A read that ends in a lone ESC gets
+100 ms more before decoding, so an arrow that arrives in two pieces (SSH)
+is an arrow; a lone Esc key is seen 100 ms late. `Tui.fold(~M, ~step, ks, Some{m})`
 folds a `step: M -> Key -> Maybe<M>` over the keys, for updates that treat
 keys one at a time. Both are templates over closed defs, as `App.run` is:
 that is what lets `view` and `update` be called every turn (a closure is
@@ -104,16 +111,18 @@ alias is per file.
 `fit` and `fit_rows` recurse on the size, so each count is one induction on
 it, and `render` is `fit_rows` of `draw`, so its laws are those applied: the
 theorem about every widget costs two lines. `diff_self` is reflexivity of the
-comparisons from `U32.cmp` up (`u32_cmp_refl` from
-[bend-lemmas](https://github.com/caiodomingues/bend-lemmas)) and a join of
-empty strings. `bend PROOF.bend` prints `All terms check.`
+comparisons from `U32.cmp` and `Bool.cmp` up (`u32_cmp_refl`, `bool_cmp_refl`
+from [bend-lemmas](https://github.com/caiodomingues/bend-lemmas)) and a
+concat of empty strings. `bend PROOF.bend` prints `All terms check.`
 
 ## Lanes
 
 - **Native** (`bend demos/todo.bend -o todo`): verified on Linux with clang
-  14 under a 40x12 pty — typing, Enter, arrows, Tab, Delete, Esc; every row
-  exactly 40 cells; the dashboard ticking at 100 ms; the alternate screen
-  and raw mode left as found.
+  14 under a pty — typing, Enter, arrows, Tab, Delete, Esc and Ctrl-C; every
+  row exactly 40 cells at 40x12 and 90 at 90x24; a resize to 60x20 mid-run
+  repainted at the new size; an arrow split into ESC and `[B` up to 80 ms
+  apart decoded as an arrow; the dashboard ticking at 100 ms; SIGTERM on the
+  alternate screen left the shell with its cursor, main screen and echo.
 - **JS** (`bend demos/todo.bend`): the same, verified under a pty — but only
   from a checkout whose directories have no `-`: the JS emitter keeps a
   hyphen from a module path in the identifiers it generates
@@ -124,7 +133,7 @@ empty strings. `bend PROOF.bend` prints `All terms check.`
 
 Not in v1: mouse, wide characters (one cell is one column), a resize signal
 (the size is read each turn instead), a cursor for `Input` (it is drawn
-inverse, not moved).
+inverse, not moved), a sequence split across the `max` of a read.
 
 ## Run
 

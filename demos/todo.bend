@@ -53,6 +53,10 @@ def backspace(s: String) -> String:
 def sel_down(+sel: Nat, +n: Nat) -> Nat:
   Bool.pick(Nat, Nat.is_lt(1n+sel, n), 1n+sel, sel)
 
+# the selection after a removal: the same index, or the new last item
+def sel_after(+sel: Nat, +n: Nat) -> Nat:
+  Nat.min(sel, Nat.sub(n, 1n))
+
 def add(+items: List<&2, String>, +input: String) -> List<&2, String>:
   match input:
     case SNil{}:
@@ -71,7 +75,8 @@ def step.at(+m: Todo, k: T.Key) -> Maybe<&2, Todo>:
     case Todo{items, sel, input} T.Tab{}:
       Some{Todo{toggle_at(items, sel), sel, input}}
     case Todo{items, sel, input} T.Delete{}:
-      Some{Todo{remove_at(items, sel), Nat.sub(sel, 1n), input}}
+      +rest = remove_at(items, sel)
+      Some{Todo{rest, sel_after(sel, List.length(&2, String, rest)), input}}
     case Todo{items, sel, input} T.Enter{}:
       Some{Todo{add(items, input), sel, ""}}
     case Todo{items, sel, input} T.Backspace{}:
@@ -92,7 +97,7 @@ def view.at(+m: Todo) -> U.View:
   match m:
     case Todo{items, sel, input}:
       U.Boxed{"todo", U.Below{
-        U.Menu{items, sel, 0n},
+        U.Menu{items, sel},
         U.Above{U.Text{U.Style.fg(245), "Enter adds, Tab marks, Delete removes, Esc quits"}, U.Input{input, String.length(input)}, 1n},
         2n}}
 

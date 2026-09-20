@@ -1,5 +1,6 @@
-# dashboard: three panels side by side, bars that advance on every
-# turn (an update with no keys is a tick), a log below. Esc quits.
+# dashboard: three panels side by side (a third of the width each),
+# bars that advance on every turn (an update with no keys is a tick),
+# a log below. Esc or Ctrl-C quits.
 #
 #   bend demos/dashboard.bend -o dashboard && ./dashboard
 import Base
@@ -28,7 +29,7 @@ def panel(title: String, +n: Nat, +period: Nat, +color: U32) -> U.View:
 
 def view.at(+n: Nat) -> U.View:
   U.Below{
-    U.Beside{panel("cpu", n, 40n, 42), U.Beside{panel("mem", n, 90n, 214), panel("disk", n, 200n, 203), 26n}, 26n},
+    U.Split{panel("cpu", n, 40n, 42), U.Split{panel("mem", n, 90n, 214), panel("disk", n, 200n, 203), 1n, 2n}, 1n, 3n},
     U.Boxed{"log", U.Lines{U.Style.fg(245), ["turn " ++ Nat.show(n), "Esc quits"]}},
     4n}
 
