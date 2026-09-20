@@ -143,4 +143,4 @@ inverse, not moved), a sequence split across the `max` of a read.
     bend demos/dashboard.bend -o dashboard && ./dashboard
 
 Depends on `../bend-tty` (effects and keys) and, for the proofs,
-`../bend-lemmas` (one lemma): clone the three side by side.
+`../bend-lemmas` (two lemmas): clone the three side by side.
