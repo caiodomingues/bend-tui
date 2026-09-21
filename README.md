@@ -127,7 +127,7 @@ concat of empty strings. `bend PROOF.bend` prints `All terms check.`
   from a checkout whose directories have no `-`: the JS emitter keeps a
   hyphen from a module path in the identifiers it generates
   (`$$bend-tty$tty$Tty$raw$`), which is a syntax error. Native is fine.
-  Upstream `bend2/comp.ts`, `js_sat`, as of 2.0.18.
+  Upstream `bend2/comp.ts`, `js_sat`, still as of 2.0.22.
 - The checker reports the template instances (`Tui.run`, `Tui.loop`,
   `Tui.fold`) as "3 unsafe annotations": that is how it counts templates.
 
