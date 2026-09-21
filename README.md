@@ -125,11 +125,10 @@ concat of empty strings. `bend PROOF.bend` prints `All terms check.`
   repainted at the new size; an arrow split into ESC and `[B` up to 80 ms
   apart decoded as an arrow; the dashboard ticking at 100 ms; SIGTERM on the
   alternate screen left the shell with its cursor, main screen and echo.
-- **JS** (`bend demos/todo.bend`): the same, verified under a pty — but only
-  from a checkout whose directories have no `-`: the JS emitter keeps a
-  hyphen from a module path in the identifiers it generates
-  (`$$bend-tty$tty$Tty$raw$`), which is a syntax error. Native is fine.
-  Upstream `bend2/comp.ts`, `js_sat`, still as of 2.0.22.
+- **JS** (`bend demos/todo.bend`): the same, verified under a pty. It needs
+  bend 2.0.23 or later: up to 2.0.22 the JS emitter kept a hyphen from a
+  module path in the identifiers it generated (`$$bend-tty$tty$Tty$raw$`), a
+  syntax error from any checkout with a `-` in its path (bendlang/bend#904).
 - The checker reports the template instances (`Tui.run`, `Tui.loop`,
   `Tui.fold`) as "3 unsafe annotations": that is how it counts templates.
 
