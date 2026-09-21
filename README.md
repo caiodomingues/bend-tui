@@ -51,7 +51,9 @@ def main() -> IO(Unit):
 
 That is `demos/dashboard.bend`. `demos/todo.bend` is a list with an input:
 type and Enter to add, Up/Down, Tab to mark done, Delete, Esc. Ctrl-C quits
-any `Tui.run`.
+any `Tui.run`. `demos/life.bend` is Conway's Game of Life on a 60x16 grid, a
+generation per tick and every row in its own color: Space pauses, r reseeds,
+Esc quits.
 
 ## API
 
@@ -141,6 +143,7 @@ inverse, not moved), a sequence split across the `max` of a read.
     bend PROOF.bend                      # All terms check.
     bend demos/todo.bend -o todo && ./todo
     bend demos/dashboard.bend -o dashboard && ./dashboard
+    bend demos/life.bend -o life && ./life
 
 Depends on `../bend-tty` (effects and keys) and, for the proofs,
 `../bend-lemmas` (two lemmas): clone the three side by side.
