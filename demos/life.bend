@@ -6,6 +6,7 @@
 import Base
 import ../../bend-tty/tty.bend as T
 import ../tui.bend as U
+import ../run.bend as R
 
 def W() -> Nat:
   60n
@@ -204,4 +205,4 @@ def view(m: Life) -> U.View:
   view.at(m)
 
 def main() -> IO(Unit):
-  U.Tui.run(~Life, ~U.Tui{view, update}, seed_grid(2463534242), 100)
+  R.Tui.run(~Life, ~U.Tui{view, update}, seed_grid(2463534242), 100)

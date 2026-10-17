@@ -5,6 +5,7 @@
 import Base
 import ../../bend-tty/tty.bend as T
 import ../tui.bend as U
+import ../run.bend as R
 
 type Todo is Data:
   Todo{items: List<&2, String>, sel: Nat, input: String}
@@ -105,4 +106,4 @@ def view(m: Todo) -> U.View:
   view.at(m)
 
 def main() -> IO(Unit):
-  U.Tui.run(~Todo, ~U.Tui{view, update}, init(), 50)
+  R.Tui.run(~Todo, ~U.Tui{view, update}, init(), 50)

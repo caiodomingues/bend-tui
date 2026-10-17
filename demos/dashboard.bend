@@ -6,6 +6,7 @@
 import Base
 import ../../bend-tty/tty.bend as T
 import ../tui.bend as U
+import ../run.bend as R
 
 # the turn count; each bar is a phase of it
 def step.at(+n: Nat, k: T.Key) -> Maybe<&2, Nat>:
@@ -37,4 +38,4 @@ def view(n: Nat) -> U.View:
   view.at(n)
 
 def main() -> IO(Unit):
-  U.Tui.run(~Nat, ~U.Tui{view, update}, 0n, 100)
+  R.Tui.run(~Nat, ~U.Tui{view, update}, 0n, 100)
