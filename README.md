@@ -4,6 +4,7 @@ Terminal interfaces for [Bend](https://bend-lang.com) 2, on
 [bend-tty](https://github.com/caiodomingues/bend-tty). A `View` is a tree of
 widgets; `render` lays it out into a frame of cells; `Frame.diff` writes only
 the rows that changed; `Tui.run` is the loop, in the shape of Base's `App.run`.
+Requires Bend 2.0.37, as bend-tty does.
 
 Two facts about every frame are theorems, not tests: it has exactly `h`
 rows, and every row has exactly `w` cells, for every view, size and state
@@ -14,6 +15,7 @@ nothing (`diff_self`), so an idle screen costs no output.
 import Base
 import ../../bend-tty/tty.bend as T
 import ../tui.bend as U
+import ../run.bend as R
 
 # the turn count; each bar is a phase of it
 def step.at(+n: Nat, k: T.Key) -> Maybe<&2, Nat>:
@@ -46,7 +48,7 @@ def view(n: Nat) -> U.View:
   view.at(n)
 
 def main() -> IO(Unit):
-  U.Tui.run(~Nat, ~U.Tui{view, update}, 0n, 100)
+  R.Tui.run(~Nat, ~U.Tui{view, update}, 0n, 100)
 ```
 
 That is `demos/dashboard.bend`. `demos/todo.bend` is a list with an input:
@@ -82,7 +84,7 @@ text cannot move the cursor or start an escape. `Style{fg, bg, bold}` uses
 `Frame.show(f)` is the string that paints it all, `Frame.diff(next, prev)` the
 string that paints what changed, row by row.
 
-**The loop**: `Tui.run(~M, ~Tui{view, update}, m0, ms)` with
+**The loop** (`run.bend`): `Tui.run(~M, ~Tui{view, update}, m0, ms)` with
 `view: M -> View` and `update: List<Key> -> M -> Maybe<M>`. Each turn: the
 terminal's size, `view` of the state rendered to it, the diff written (the
 whole frame after a resize), the keys read within `ms` (an empty list on a
@@ -97,8 +99,13 @@ affine, one call). Since a template's function argument must take affine
 parameters, a `step` or `view` that uses its state twice is a `+m` def
 wrapped in an affine one (`step.at`/`step` in the demos).
 
-The consumer imports `tty.bend` itself to name the keys (`T.Up{}`): an
-alias is per file.
+The library is two files. `tui.bend` is pure: the views, `render`,
+`Frame.diff`, the `Tui` app type and `Tui.fold`, everything the proofs need.
+`run.bend` holds the loop, which runs bend-tty's effects (`tty_io.bend`);
+a proof may import no foreign code, so the split keeps `PROOF.bend` on the
+pure file. A program imports `tui.bend` and `run.bend`, and `tty.bend` to
+name the keys (`T.Up{}`): Bend does not re-export imports, and an alias is
+per file.
 
 ## Laws
 
@@ -115,22 +122,29 @@ it, and `render` is `fit_rows` of `draw`, so its laws are those applied: the
 theorem about every widget costs two lines. `diff_self` is reflexivity of the
 comparisons from `U32.cmp` and `Bool.cmp` up (`u32_cmp_refl`, `bool_cmp_refl`
 from [bend-lemmas](https://github.com/caiodomingues/bend-lemmas)) and a
-concat of empty strings. `bend PROOF.bend` prints `All terms check.`
+concat of empty strings. `bend PROOF.bend` prints `ALL PROOFS CHECK`; it
+imports `tui.bend` alone, since importing `run.bend`, or any file with
+foreign code, fails the verdict. `bend LAWS.bend` states the laws without
+their proofs, so it prints `SOME PROOFS FAIL` with its 6 TODOs.
 
 ## Lanes
 
-- **Native** (`bend demos/todo.bend -o todo`): verified on Linux with clang
-  14 under a pty — typing, Enter, arrows, Tab, Delete, Esc and Ctrl-C; every
-  row exactly 40 cells at 40x12 and 90 at 90x24; a resize to 60x20 mid-run
-  repainted at the new size; an arrow split into ESC and `[B` up to 80 ms
-  apart decoded as an arrow; the dashboard ticking at 100 ms; SIGTERM on the
-  alternate screen left the shell with its cursor, main screen and echo.
-- **JS** (`bend demos/todo.bend`): the same, verified under a pty. It needs
-  bend 2.0.23 or later: up to 2.0.22 the JS emitter kept a hyphen from a
-  module path in the identifiers it generated (`$$bend-tty$tty$Tty$raw$`), a
-  syntax error from any checkout with a `-` in its path (bendlang/bend#904).
-- The checker reports the template instances (`Tui.run`, `Tui.loop`,
-  `Tui.fold`) as "3 unsafe annotations": that is how it counts templates.
+- **Native** (`bend demos/todo.bend -o todo`): verified on Linux (WSL) with
+  Bend 2.0.37 under an 80x24 pty: typing, Enter, arrows, Tab, Delete and Esc
+  in the todo, the dashboard ticking at 100 ms, Space and r in life, each
+  quitting with exit 0; the output of all three is byte for byte that of
+  their Bend 2.0.23 builds. On 2.0.23 it was also verified with Ctrl-C,
+  every row exactly 40 cells at 40x12 and 90 at 90x24, a resize to 60x20
+  mid-run repainted at the new size, an arrow split into ESC and `[B` up to
+  80 ms apart decoded as an arrow, and SIGTERM on the alternate screen
+  leaving the shell with its cursor, main screen and echo.
+- **JS** (`bend demos/todo.bend`, or `-o todo.js` and `bun todo.js`): the
+  same three runs under bun 1.4.2, byte for byte the output of the 2.0.23 JS
+  builds. bun, not node: bend-tty's read reaches libc through `bun:ffi`.
+- A file that runs effects fails the verdict by design: `bend run.bend
+  --check-only` and `bend demos/todo.bend --check-only` print `SOME PROOFS
+  FAIL` and list the defs that rely on foreign code. For those the gate is
+  the build.
 
 Not in v1: mouse, wide characters (one cell is one column), a resize signal
 (the size is read each turn instead), a cursor for `Input` (it is drawn
@@ -139,10 +153,12 @@ inverse, not moved), a sequence split across the `max` of a read.
 ## Run
 
     bend tui.bend                        # renders a sample as text
-    bend PROOF.bend                      # All terms check.
+    bend PROOF.bend                      # ALL PROOFS CHECK
+    bend LAWS.bend                       # SOME PROOFS FAIL: 6 TODOs, the laws unproven
     bend demos/todo.bend -o todo && ./todo
     bend demos/dashboard.bend -o dashboard && ./dashboard
     bend demos/life.bend -o life && ./life
 
-Depends on `../bend-tty` (effects and keys) and, for the proofs,
-`../bend-lemmas` (two lemmas): clone the three side by side.
+Depends on `../bend-tty` (`tty.bend` for the escapes and keys,
+`tty_io.bend` for the effects) and, for the proofs, `../bend-lemmas` (two
+lemmas): clone the three side by side.
