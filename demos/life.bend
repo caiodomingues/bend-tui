@@ -191,7 +191,7 @@ def grid(rows: List<&2, List<&2, Bool>>, +y: Nat) -> U.View:
     case Nil{}:
       U.Fill{U.Cell.blank()}
     case r <> t:
-      U.Above{U.Text{U.Style.fg(color(y)), row_text(r)}, grid(t, 1n+y), 1n}
+      U.Above{U.View.Text{U.Style.fg(color(y)), row_text(r)}, grid(t, 1n+y), 1n}
 
 def status(rows: List<&2, List<&2, Bool>>, gen: Nat, run: Bool) -> String:
   "gen " ++ Nat.show(gen) ++ "  alive " ++ U32.show(alive(rows)) ++ Bool.pick(String, run, "", "  paused") ++ "   Space pauses, r reseeds, Esc quits"
@@ -199,7 +199,7 @@ def status(rows: List<&2, List<&2, Bool>>, gen: Nat, run: Bool) -> String:
 def view.at(+m: Life) -> U.View:
   match m:
     case Life{rows, gen, run, seed}:
-      U.Boxed{"life", U.Below{grid(rows, 0n), U.Text{U.Style.fg(245), status(rows, gen, run)}, 1n}}
+      U.Boxed{"life", U.Below{grid(rows, 0n), U.View.Text{U.Style.fg(245), status(rows, gen, run)}, 1n}}
 
 def view(m: Life) -> U.View:
   view.at(m)

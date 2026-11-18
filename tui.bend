@@ -95,7 +95,7 @@ def fit_rows(h: Nat, +w: Nat, rows: List<&2, List<&2, Cell>>) -> List<&2, List<&
 # -----
 
 type View is Data:
-  Text{st: Style, s: String}                    # one row
+  View.Text{st: Style, s: String}               # one row
   Lines{st: Style, ls: List<&2, String>}        # a row per string
   Fill{c: Cell}                                 # the whole area
   Above{top: View, bottom: View, rows: Nat}     # top gets rows rows, bottom the rest
@@ -187,7 +187,7 @@ def box_corner(+w: Nat, row: List<&2, Cell>, +corner: U32) -> List<&2, Cell>:
 
 def draw(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
   match v:
-    case Text{st, s}:
+    case View.Text{st, s}:
       [Cell.text(st, s)]
     case Lines{st, ls}:
       lines(st, ls)

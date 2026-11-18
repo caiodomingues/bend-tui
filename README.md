@@ -4,7 +4,7 @@ Terminal interfaces for [Bend](https://bend-lang.com) 2, on
 [bend-tty](https://github.com/caiodomingues/bend-tty). A `View` is a tree of
 widgets; `render` lays it out into a frame of cells; `Frame.diff` writes only
 the rows that changed; `Tui.run` is the loop, in the shape of Base's `App.run`.
-Requires Bend 2.0.37, as bend-tty does.
+Requires Bend 2.0.40, as bend-tty does.
 
 Two facts about every frame are theorems, not tests: it has exactly `h`
 rows, and every row has exactly `w` cells, for every view, size and state
@@ -34,7 +34,7 @@ def update(ks: List<&2, T.Key>, n: Nat) -> Maybe<&2, Nat>:
 
 def panel(title: String, +n: Nat, +period: Nat, +color: U32) -> U.View:
   U.Boxed{title, U.Above{
-    U.Text{U.Style.plain(), Nat.show(Nat.mod(n, period)) ++ " / " ++ Nat.show(period)},
+    U.View.Text{U.Style.plain(), Nat.show(Nat.mod(n, period)) ++ " / " ++ Nat.show(period)},
     U.Progress{Nat.mod(n, period), period, U.Style.fg(color)},
     1n}}
 
@@ -63,7 +63,7 @@ Esc quits.
 
 | view | draws |
 | --- | --- |
-| `Text{st, s}` | one row |
+| `View.Text{st, s}` | one row |
 | `Lines{st, ls}` | a row per string |
 | `Fill{c}` | the whole area with one cell |
 | `Above{top, bottom, rows}` / `Below{top, bottom, rows}` | a split: `rows` for the top, or for the bottom; the other gets the rest |

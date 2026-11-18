@@ -99,7 +99,7 @@ def view.at(+m: Todo) -> U.View:
     case Todo{items, sel, input}:
       U.Boxed{"todo", U.Below{
         U.Menu{items, sel},
-        U.Above{U.Text{U.Style.fg(245), "Enter adds, Tab marks, Delete removes, Esc quits"}, U.Input{input, String.length(input)}, 1n},
+        U.Above{U.View.Text{U.Style.fg(245), "Enter adds, Tab marks, Delete removes, Esc quits"}, U.Input{input, String.length(input)}, 1n},
         2n}}
 
 def view(m: Todo) -> U.View:

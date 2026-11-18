@@ -24,7 +24,7 @@ def update(ks: List<&2, T.Key>, n: Nat) -> Maybe<&2, Nat>:
 
 def panel(title: String, +n: Nat, +period: Nat, +color: U32) -> U.View:
   U.Boxed{title, U.Above{
-    U.Text{U.Style.plain(), Nat.show(Nat.mod(n, period)) ++ " / " ++ Nat.show(period)},
+    U.View.Text{U.Style.plain(), Nat.show(Nat.mod(n, period)) ++ " / " ++ Nat.show(period)},
     U.Progress{Nat.mod(n, period), period, U.Style.fg(color)},
     1n}}
 
