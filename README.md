@@ -223,7 +223,9 @@ per file.
 | `lines_first_same(ls, i)` | two lists of the same lines have no first difference |
 | `inline_same(st, s)` | drawing a screen again, unchanged, writes `""`, on a terminal or not |
 | `static_once(st, done, more, live)` | after a draw, the done views left to write are exactly those added since |
-| `pipe_plain(prev, fresh, next)` | with no terminal, a draw writes the new done lines joined by line breaks, nothing else |
+| `pipe_plain(prev, fresh, next)` | with no terminal, `Inline.write` writes the new done lines joined by line breaks, nothing else |
+| `pipe_draw(..)`, `pipe_end(..)` | with no terminal, what `Inline.draw` writes is the done lines not yet written, joined by line breaks, and what `Inline.end` writes is those and the whole final frame: never a cursor movement, for every screen |
+| `pct_halves` | a percent basis is a share of the whole row for every child: two halves of 20 columns are 10 and 10 |
 
 `fit` and `fit_rows` recurse on the size, so each count is one induction on
 it, and `render` is `fit_rows` of `draw`, so its laws are those applied: the
@@ -232,43 +234,56 @@ the comparisons, from `U32.cmp` and `Bool.cmp` up through colours, styles,
 looks and cells (`u32_cmp_refl`, `bool_cmp_refl` from
 [bend-lemmas](https://github.com/caiodomingues/bend-lemmas)), and a concat
 of empty strings. `inline_same` is a drop of the done list by its own
-length, which is empty, and `lines_first_same`; `static_once` is the drop
-of a longer list. `bend PROOF.bend` prints `ALL PROOFS CHECK`; it imports
-`tui.bend` alone, since importing `run.bend`, or any file with foreign
-code, fails the verdict. `bend LAWS.bend` states the laws without their
-proofs, so it prints `SOME PROOFS FAIL` with its TODOs.
+length, which is empty, `lines_first_same`, and the cursor's key compared
+with itself; `static_once` is the drop of a longer list. `bend PROOF.bend`
+prints `ALL PROOFS CHECK`; it imports `tui.bend` alone, since importing
+`run.bend`, or any file with foreign code, fails the verdict. `bend
+LAWS.bend` states the laws without their proofs, so it prints `SOME PROOFS
+FAIL` with its TODOs.
 
 ## Lanes
 
-- **Native** (`bend demos/todo.bend -o todo`): verified on Linux (WSL) with
-  Bend 2.0.40 under an 80x24 pty: typing (a CJK character too), Enter,
-  arrows, Tab and Esc in the todo, the dashboard ticking at 100 ms and
-  quitting on Ctrl-C, Space and r in life, each quitting with exit 0 and
-  the cursor shown; SIGTERM on the todo leaves the main screen and the
-  cursor. `demos/steps.bend` under a pty: each line above written once, the
+Everything below ran on Linux (WSL, x86_64) with Bend 2.0.40, under a pty
+driven by a script and read back through a small terminal emulator (no
+reflow on resize), not in a real terminal; macOS was not tried.
+
+- **Native** (`bend demos/todo.bend -o todo`): typing (a CJK character
+  too), Enter, arrows, Tab and Esc in the todo, the dashboard ticking at
+  100 ms and quitting on Ctrl-C, Space and r in life, each quitting with
+  exit 0 and the cursor shown; SIGTERM on the todo leaves the main screen
+  and the cursor. `demos/steps.bend`: each line above written once, the
   live line redrawn alone (up one row, erase down), the summary left with
   the cursor shown; Ctrl-C and SIGTERM mid-task end it with the cursor
-  shown; a resize to 50 columns mid-run redraws at the new width; a live
-  frame of 30 lines in 24 rows shows its last 23, then all 30 once at the
-  end. Piped, and with `NO_COLOR=1`, its output holds no ESC byte.
+  shown; a resize from 80 to 30 columns mid-run redraws at 30. A live frame
+  of 30 lines in 24 rows shows its last 23, then all 30 once at the end.
   `demos/install.bend` at 40, 80 and 120 columns: at 80 and 120 the lines
   above and the bar line as in the sample; at 40 a long line wraps under
   its text, not under its mark, and the bar shrinks before the percentage
-  does; piped, with `NO_COLOR=1`, no ESC byte. `demos/tasks.bend`: the
-  running parent with `❯`, its subtasks in, the running one's output
-  under it; piped, a block per top task as it finishes.
-  `demos/prompts.bend` driven by keys: Down and Enter, Space, Down, Down,
-  Space and Enter, `n`, then `games`, Backspace, Left, `X` and Enter
-  answer platformer; physics, networking; No; gamXe, each left collapsed;
-  the real cursor sits on the placeholder's first character, then after
-  `gamX`; Ctrl-C in the first prompt and Esc in the second end the flow
-  with `■` and `└  cancelled`. The JS lane answers the same.
-- **JS** (`bend demos/todo.bend -o todo.js` and `bun todo.js`): the same
-  runs under bun 1.4.2, the same bytes for `steps` but for timing. bun, not
-  node: bend-tty's read reaches libc through `bun:ffi`. A signal ends a JS
-  program with the terminal as it was (bend-tty hooks none on this lane,
-  since the runtime never yields to bun's signal listeners): Ctrl-C during
-  a `Cli.run` task leaves the cursor hidden (`tput cnorm` shows it).
+  does. Under a pty, `NO_COLOR=1` moves the cursor and writes no SGR;
+  `CI=1` and `TERM=dumb` write no cursor movement and no SGR;
+  `FORCE_COLOR=3 | cat` writes colours and no cursor movement; piped, no
+  ESC byte. `demos/tasks.bend`: the running parent with `❯`, its subtasks
+  in, the running one's output under it; piped, a block per top task as it
+  finishes. `demos/prompts.bend` driven by keys: Down and Enter, Space,
+  Down, Down, Space and Enter, `n`, then `games`, Backspace, Left, `X` and
+  Enter answer platformer; physics, networking; No; gamXe, each left
+  collapsed; the real cursor sits on the placeholder's first character,
+  then after `gamX`; Ctrl-C in the first prompt and Esc in the second end
+  the flow with `■` and `└  cancelled`; with stdin at `/dev/null` the first
+  prompt cancels; under `NO_COLOR=1` the multi-select's row under the
+  cursor shows `›`. A link is OSC 8 under a pty and `text (url)` piped. A
+  loop ended by a key while its work still posts exits 0.
+- **JS** (`bend demos/todo.bend -o todo.js` and `bun todo.js`), bun 1.4.2:
+  the same runs for the todo, dashboard, life, steps, install (80 columns
+  and the four environments above), tasks and prompts, with the same
+  results, and the same bytes for `steps` and `install`. Two differ: a
+  resize is not seen (bun updates `process.stdout.columns` on its own event
+  loop, which the runtime never runs, so the size stays the first one), and
+  a signal ends the program with the terminal as it was (bend-tty hooks
+  none on this lane, for the same reason): Ctrl-C during a `Cli.run` task
+  leaves the cursor hidden (`tput cnorm` shows it), and SIGTERM on a
+  `Tui.run` leaves the alternate screen and raw mode. bun, not node:
+  bend-tty's read reaches libc through `bun:ffi`.
 - A file that runs effects fails the verdict by design: `bend run.bend
   --check-only` and `bend demos/todo.bend --check-only` print `SOME PROOFS
   FAIL` and list the defs that rely on foreign code. For those the gate is
@@ -277,9 +292,13 @@ proofs, so it prints `SOME PROOFS FAIL` with its TODOs.
 Not in v1: mouse, a resize signal (the size is read each turn instead), a
 real cursor in full-screen apps (`Input` is drawn inverse there; the
 inline `View.Edit` moves it), editing by grapheme cluster in `Field` (it
-edits code points), a sequence split
-across the `max` of a read, flex wrapping onto more lines, `min-content`
-sizes (a child shrinks to zero columns, not to its longest word).
+edits code points), a window for long selects (every item is shown), a
+sequence split across the `max` of a read, flex wrapping onto more lines,
+`min-content` sizes (a child shrinks to zero columns, not to its longest
+word). With stdout not a terminal, a prompt is not drawn while it is open
+(the loop draws nothing live there) but still reads keys; its summary comes
+at the end. Under `NO_COLOR`, a full-screen `Menu` or `Input` loses its
+inverse cell, the only thing that marks the selection.
 
 ## Run
 

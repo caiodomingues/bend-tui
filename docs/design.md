@@ -1,5 +1,13 @@
 # Design: inline rendering, layout and CLI components
 
+> The sketch shown for review before any code (2026-11-24). The README
+> is what was built; where they differ, the README holds. Not built from
+> this sketch: the `fit_wide` and `cell_safe` laws (fit blanks a cut wide
+> cluster and `Cell.safe` blanks control characters, both untested by a
+> law), a `Margin` view (`View.margin` is a `Pad`), `Screen.cursor` (a
+> `Cell.At` in the frame marks it instead), and a scrolling window for
+> long selects. Built beyond it: `pipe_draw`, `pipe_end`, `pct_halves`.
+
 A sketch for review before any code. Names are proposals. `C` is bend-tty's
 `color.bend`, `X` its `text.bend`, `T` its `tty.bend`.
 

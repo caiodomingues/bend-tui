@@ -156,7 +156,7 @@ cluster and a wide one takes two cells.
 | --- | --- | --- |
 | Spinner | cli-spinners `dots`: `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` at 80 ms; clack: `◒◐◓◑` magenta at 80 ms | both sets, frame = tick count mod frames, the program's clock |
 | Progress | Bubbles: `fw = round((width - percentWidth) * p)`, ` %3.0f%%`; ratatui Gauge, eighth blocks | `█`/`░` bar, a right-aligned percentage, an ETA string the program supplies |
-| Select | ink-select-input: blue `❯`, blue label, j/k and arrows wrap, Enter, digits 1-9; clack: `●`/`○` radios, `◻`/`◼` checkboxes, `k j h l` aliases | clack's look, ink's keys; a window that scrolls (ink rotates instead) |
+| Select | ink-select-input: blue `❯`, blue label, j/k and arrows wrap, Enter, digits 1-9; clack: `●`/`○` radios, `◻`/`◼` checkboxes, `k j h l` aliases | clack's look and ink's keys but the digits; every item is shown, with no window (not built) |
 | Confirm | clack: `● Yes / ○ No`, `y`/`n` submit at once | as is |
 | TextInput | ink-text-input and Bubbles draw an inverse cell; Bubbles can place the real cursor; clack draws `█` at the end, placeholder dim with its first character inverse | the **real** cursor, moved there after the frame is drawn; clack's placeholder; Home/End and Delete, which ink-text-input lacks |
 | Task list | listr2: yellow spinner running, green `✔` done, red `✖` failed (the message replaces the title), yellow `↓` skipped, dim `◼` waiting; 2 spaces per level; a finished parent collapses its subtasks unless one failed; `› output` under a task | all of it; `✓`/`✗` as the prompt asks |
