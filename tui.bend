@@ -7,60 +7,137 @@
 #
 #   bend tui.bend        # checks; main renders a small tree as text
 #
-# One cell is one column: no wide characters or emoji widths.
+# A cell is one column: a grapheme cluster (bend-tty's X.Ansi.units)
+# that is two columns wide takes two cells, the cluster and a Cell.Pad.
 
 import Base
 import ../bend-tty/tty.bend as T
+import ../bend-tty/color.bend as C
+import ../bend-tty/text.bend as X
+
+# Looks
+# -----
+# A cell's look is bend-tty's Style and an OSC 8 link ("" for none). It
+# is painted at the stream's colour level when a frame becomes a
+# string, so a view never knows whether it goes to a pipe.
+
+type Look is Data:
+  Look.Of{st: C.Style, link: String}
+
+def Look.plain() -> Look:
+  Look.Of{C.Style.plain(), ""}
+
+def Look.st(st: C.Style) -> Look:
+  Look.Of{st, ""}
+
+# The 256-colour helpers of the first API, now bend-tty Styles
+
+def Style.plain() -> C.Style:
+  C.Style.plain()
+
+def Style.fg(c: U32) -> C.Style:
+  C.Style.fg(C.Color.Ansi256{c}, C.Style.plain())
+
+def Style.bold(c: U32) -> C.Style:
+  C.Style.bold(Style.fg(c))
+
+def Style.inverse() -> C.Style:
+  C.Style.inverse(C.Style.plain())
+
+# Equality, compared field by field so that its reflexivity is a
+# structural proof (PROOF.bend)
+
+def Str.same(a: String, b: String) -> Bool:
+  match a b:
+    case SNil{} SNil{}:
+      True{}
+    case SCon{Chr{x}, xt} SCon{Chr{y}, yt}:
+      Bool.and(U32.is_eq(x, y), Str.same(xt, yt))
+    case other1 other2:
+      False{}
+
+def Bool.same(a: Bool, b: Bool) -> Bool:
+  Cmp.is_eq(Bool.cmp(a, b))
+
+def Color.same(a: C.Color, b: C.Color) -> Bool:
+  match a b:
+    case C.Color.Default{} C.Color.Default{}:
+      True{}
+    case C.Color.Basic{x} C.Color.Basic{y}:
+      U32.is_eq(x, y)
+    case C.Color.Ansi256{x} C.Color.Ansi256{y}:
+      U32.is_eq(x, y)
+    case C.Color.Rgb{r1, g1, b1} C.Color.Rgb{r2, g2, b2}:
+      Bool.and(U32.is_eq(r1, r2), Bool.and(U32.is_eq(g1, g2), U32.is_eq(b1, b2)))
+    case other1 other2:
+      False{}
+
+def Style.same(a: C.Style, b: C.Style) -> Bool:
+  match a b:
+    case C.Style{f1, b1, x1, y1, z1, u1, v1, h1, s1} C.Style{f2, b2, x2, y2, z2, u2, v2, h2, s2}:
+      Bool.and(Color.same(f1, f2), Bool.and(Color.same(b1, b2),
+        Bool.and(Bool.same(x1, x2), Bool.and(Bool.same(y1, y2), Bool.and(Bool.same(z1, z2),
+          Bool.and(Bool.same(u1, u2), Bool.and(Bool.same(v1, v2), Bool.and(Bool.same(h1, h2), Bool.same(s1, s2)))))))))
+
+def Look.is_eq(a: Look, b: Look) -> Bool:
+  match a b:
+    case Look.Of{s1, l1} Look.Of{s2, l2}:
+      Bool.and(Style.same(s1, s2), Str.same(l1, l2))
 
 # Cells
 # -----
 
-# fg and bg are 256-color codes; 256 is the terminal's default
-type Style is Data:
-  Style{fg: U32, bg: U32, bold: Bool}
-
-def Style.plain() -> Style:
-  Style{256, 256, False{}}
-
-def Style.fg(c: U32) -> Style:
-  Style{c, 256, False{}}
-
-def Style.bold(c: U32) -> Style:
-  Style{c, 256, True{}}
-
-# selected rows: black on white
-def Style.inverse() -> Style:
-  Style{0, 7, False{}}
-
-def Style.is_eq(a: Style, b: Style) -> Bool:
-  match a b:
-    case Style{f1, b1, o1} Style{f2, b2, o2}:
-      Bool.and(U32.is_eq(f1, f2), Bool.and(U32.is_eq(b1, b2), Cmp.is_eq(Bool.cmp(o1, o2))))
-
-# ch is a Unicode code point
 type Cell is Data:
-  Cell{ch: U32, st: Style}
+  Cell.Of{g: String, look: Look}   # a cluster
+  Cell.Pad{}                       # the second column of a wide cluster: writes nothing
 
 def Cell.blank() -> Cell:
-  Cell{32, Style.plain()}
+  Cell.Of{" ", Look.plain()}
 
 def Cell.is_eq(a: Cell, b: Cell) -> Bool:
   match a b:
-    case Cell{c1, s1} Cell{c2, s2}:
-      Bool.and(U32.is_eq(c1, c2), Style.is_eq(s1, s2))
+    case Cell.Of{g1, k1} Cell.Of{g2, k2}:
+      Bool.and(Str.same(g1, g2), Look.is_eq(k1, k2))
+    case Cell.Pad{} Cell.Pad{}:
+      True{}
+    case other1 other2:
+      False{}
 
-# a code point a cell may hold: a control character (below 32, or
-# 127) would move the cursor or start an escape, so it becomes a blank
+# a code point a cell may hold: a control character (below 32, or 127
+# to 159) would move the cursor or start an escape, so it becomes a
+# blank
 def Cell.code(+c: U32) -> U32:
-  Bool.pick(U32, Bool.or(U32.is_lt(c, 32), U32.is_eq(c, 127)), 32, c)
+  Bool.pick(U32, Bool.or(U32.is_lt(c, 32), Bool.and(U32.is_ge(c, 127), U32.is_lt(c, 160))), 32, c)
 
-# a string's characters as cells of one style
-def Cell.text(+st: Style, s: String) -> List<&2, Cell>:
+def Cell.safe(s: String) -> String:
   match s:
     case SNil{}:
-      Nil{}
+      SNil{}
     case SCon{Chr{c}, t}:
-      Cell{Cell.code(c), st} <> Cell.text(st, t)
+      SCon{Chr{Cell.code(c)}, Cell.safe(t)}
+
+# a cluster's cells: none when it takes no column, two when it takes two
+def Cell.unit(+lk: Look, u: X.Un, +rest: List<&2, Cell>) -> List<&2, Cell>:
+  match u:
+    case X.Un.Esc{s}:
+      rest
+    case X.Un.Cl{g, +w}:
+      Bool.pick(List<&2, Cell>, U32.is_eq(w, 0), rest,
+        Cell.Of{g, lk} <> Bool.pick(List<&2, Cell>, U32.is_eq(w, 2), Cell.Pad{} <> rest, rest))
+
+def Cell.units(+lk: Look, us: List<&2, X.Un>) -> List<&2, Cell>:
+  match us:
+    case Nil{}:
+      Nil{}
+    case u <> t:
+      Cell.unit(lk, u, Cell.units(lk, t))
+
+# a string's clusters as cells of one look
+def Cell.look(+lk: Look, s: String) -> List<&2, Cell>:
+  Cell.units(lk, X.Ansi.units(Cell.safe(s)))
+
+def Cell.text(+st: C.Style, s: String) -> List<&2, Cell>:
+  Cell.look(Look.st(st), s)
 
 # Fit
 # ---
@@ -69,7 +146,33 @@ def Cell.text(+st: Style, s: String) -> List<&2, Cell>:
 # alone, so the count is structural: the laws fit_len and fit_rows_len
 # are one induction each, and every widget's frame goes through them.
 
-def fit(w: Nat, cs: List<&2, Cell>) -> List<&2, Cell>:
+def Cell.is_pad(c: Cell) -> Bool:
+  match c:
+    case Cell.Pad{}:
+      True{}
+    case Cell.Of{g, k}:
+      False{}
+
+def Cell.wide(cs: List<&2, Cell>) -> Bool:
+  match cs:
+    case Nil{}:
+      False{}
+    case c <> t:
+      Cell.is_pad(c)
+
+# the cell kept in the last column: a wide cluster whose second column
+# is cut off would print past the row, so it becomes a blank
+def Cell.edge(+last: Bool, c: Cell, cut: Bool) -> Cell:
+  Bool.pick(Cell, Bool.and(last, cut), Cell.blank(), c)
+
+def Nat.is_zero(n: Nat) -> Bool:
+  match n:
+    case 0n:
+      True{}
+    case 1n+p:
+      False{}
+
+def fit(+w: Nat, cs: List<&2, Cell>) -> List<&2, Cell>:
   match w:
     case 0n:
       Nil{}
@@ -77,8 +180,8 @@ def fit(w: Nat, cs: List<&2, Cell>) -> List<&2, Cell>:
       match cs:
         case Nil{}:
           Cell.blank() <> fit(p, Nil{})
-        case c <> t:
-          c <> fit(p, t)
+        case c <> +t:
+          Cell.edge(Nat.is_zero(p), c, Cell.wide(t)) <> fit(p, t)
 
 def fit_rows(h: Nat, +w: Nat, rows: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
   match h:
@@ -95,8 +198,8 @@ def fit_rows(h: Nat, +w: Nat, rows: List<&2, List<&2, Cell>>) -> List<&2, List<&
 # -----
 
 type View is Data:
-  View.Text{st: Style, s: String}               # one row
-  Lines{st: Style, ls: List<&2, String>}        # a row per string
+  View.Text{st: C.Style, s: String}             # one row
+  Lines{st: C.Style, ls: List<&2, String>}      # a row per string
   Fill{c: Cell}                                 # the whole area
   Above{top: View, bottom: View, rows: Nat}     # top gets rows rows, bottom the rest
   Below{top: View, bottom: View, rows: Nat}     # bottom gets rows rows, top the rest
@@ -107,7 +210,7 @@ type View is Data:
   Boxed{title: String, child: View}             # a border with a title; the child inside
   Menu{items: List<&2, String>, sel: Nat}     # a list; item sel highlighted, scrolled into view
   Input{text: String, cursor: Nat}              # one row of text with the cursor cell inverse
-  Progress{done: Nat, total: Nat, st: Style}    # one row, filled to done / total
+  Progress{done: Nat, total: Nat, st: C.Style}  # one row, filled to done / total
 
 # rows placed side by side: each left row followed by its right row
 def hcat(ls: List<&2, List<&2, Cell>>, rs: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
@@ -119,7 +222,7 @@ def hcat(ls: List<&2, List<&2, Cell>>, rs: List<&2, List<&2, Cell>>) -> List<&2,
     case l <> lt r <> rt:
       List.append(&2, Cell, l, r) <> hcat(lt, rt)
 
-def lines(+st: Style, ls: List<&2, String>) -> List<&2, List<&2, Cell>>:
+def lines(+st: C.Style, ls: List<&2, String>) -> List<&2, List<&2, Cell>>:
   match ls:
     case Nil{}:
       Nil{}
@@ -137,46 +240,53 @@ def menu_rows(items: List<&2, String>, +i: Nat, +sel: Nat) -> List<&2, List<&2, 
     case Nil{}:
       Nil{}
     case s <> t:
-      Cell.text(Bool.pick(Style, Nat.is_eq(i, sel), Style.inverse(), Style.plain()), s) <> menu_rows(t, 1n+i, sel)
+      Cell.text(Bool.pick(C.Style, Nat.is_eq(i, sel), Style.inverse(), Style.plain()), s) <> menu_rows(t, 1n+i, sel)
 
-# the input's cells: the text, with the cell at the cursor inverse; a
-# blank one when the cursor is at or past the end
-def input_cells(+cs: List<&2, Cell>, +cursor: Nat) -> List<&2, Cell>:
+def Cell.invert(c: Cell) -> Cell:
+  match c:
+    case Cell.Of{g, k}:
+      Cell.Of{g, Look.st(Style.inverse())}
+    case Cell.Pad{}:
+      Cell.Pad{}
+
+# the input's cells: the text, with the cluster at the cursor inverse;
+# a blank one when the cursor is at or past the end
+def input_cells(cs: List<&2, Cell>, +cursor: Nat) -> List<&2, Cell>:
   match cs cursor:
     case Nil{} n:
-      [Cell{32, Style.inverse()}]
-    case Cell{ch, st} <> t 0n:
-      Cell{ch, Style.inverse()} <> t
+      [Cell.Of{" ", Look.st(Style.inverse())}]
+    case c <> t 0n:
+      Cell.invert(c) <> t
     case c <> t 1n+p:
       c <> input_cells(t, p)
 
-# n cells of ch in st
-def cells_of(n: Nat, +ch: U32, +st: Style) -> List<&2, Cell>:
-  List.replicate(Cell, n, Cell{ch, st})
+# n cells of the code point ch in st
+def cells_of(n: Nat, +ch: U32, +st: C.Style) -> List<&2, Cell>:
+  List.replicate(Cell, n, Cell.Of{SCon{Chr{ch}, SNil{}}, Look.st(st)})
 
 # the filled part of a bar: w * done / total cells, total at least 1
-def bar_cells(+w: Nat, +done: Nat, +total: Nat, +st: Style) -> List<&2, Cell>:
+def bar_cells(+w: Nat, +done: Nat, +total: Nat, +st: C.Style) -> List<&2, Cell>:
   +n = Nat.div(Nat.mul(w, Nat.min(done, total)), Nat.max(total, 1n))
   List.append(&2, Cell, cells_of(n, 9608, st), cells_of(Nat.sub(w, n), 9617, st))
 
 # a box: a top row with the title, the child's rows between bars, a
 # bottom row. Box-drawing code points: 9484 9472 9488 9474 9492 9496
 def box_top(+w: Nat, title: String) -> List<&2, Cell>:
-  fit(w, List.append(&2, Cell, [Cell{9484, Style.plain()}], List.append(&2, Cell, Cell.text(Style.plain(), title), cells_of(w, 9472, Style.plain()))))
+  fit(w, List.append(&2, Cell, cells_of(1n, 9484, Style.plain()), List.append(&2, Cell, Cell.text(Style.plain(), title), cells_of(w, 9472, Style.plain()))))
 
 def box_bottom(+w: Nat) -> List<&2, Cell>:
-  fit(w, Cell{9492, Style.plain()} <> cells_of(w, 9472, Style.plain()))
+  fit(w, List.append(&2, Cell, cells_of(1n, 9492, Style.plain()), cells_of(w, 9472, Style.plain())))
 
 def box_side(rows: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
   match rows:
     case Nil{}:
       Nil{}
     case r <> t:
-      List.append(&2, Cell, Cell{9474, Style.plain()} <> r, [Cell{9474, Style.plain()}]) <> box_side(t)
+      List.append(&2, Cell, List.append(&2, Cell, cells_of(1n, 9474, Style.plain()), r), cells_of(1n, 9474, Style.plain())) <> box_side(t)
 
 # the box's corners on a top or bottom row: the last cell replaced
 def box_corner(+w: Nat, row: List<&2, Cell>, +corner: U32) -> List<&2, Cell>:
-  List.append(&2, Cell, List.take(&2, Cell, row, Nat.sub(w, 1n)), [Cell{corner, Style.plain()}])
+  List.append(&2, Cell, fit(Nat.sub(w, 1n), row), cells_of(1n, corner, Style.plain()))
 
 # Render
 # ------
@@ -231,64 +341,76 @@ def render(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
 
 # Frames to strings
 # -----------------
+# A pen is how a stream shows looks: its colour level, and whether OSC 8
+# links are written (on a terminal) or spelled out as text (url).
 
-def Style.esc.fg(+c: U32, dflt: Bool) -> String:
-  match dflt:
+type Pen is Data:
+  Pen{level: C.Level, links: Bool}
+
+def Pen.plain() -> Pen:
+  Pen{C.Level.None{}, False{}}
+
+def Look.link(on: Bool, +url: String, +s: String, none: Bool) -> String:
+  match none:
     case True{}:
-      ""
+      s
     case False{}:
-      T.Tty.fg(c)
+      T.Tty.link(on, url, s)
 
-def Style.esc.bg(+c: U32, dflt: Bool) -> String:
-  match dflt:
-    case True{}:
+def Look.paint(+p: Pen, k: Look, s: String) -> String:
+  match p k:
+    case Pen{l, on} Look.Of{st, +link}:
+      Look.link(on, link, C.Style.paint(l, st, s), Str.same(link, ""))
+
+def Cell.same_look(c: Cell, +k: Look) -> Bool:
+  match c:
+    case Cell.Of{g, k2}:
+      Look.is_eq(k2, k)
+    case Cell.Pad{}:
+      True{}
+
+def Cell.str(c: Cell) -> String:
+  match c:
+    case Cell.Of{g, k}:
+      g
+    case Cell.Pad{}:
       ""
-    case False{}:
-      T.Tty.bg(c)
 
-def Style.esc.bold(b: Bool) -> String:
-  match b:
-    case True{}:
-      T.Tty.bold()
-    case False{}:
-      ""
+def Cell.look_of(c: Cell, +dflt: Look) -> Look:
+  match c:
+    case Cell.Of{g, k}:
+      k
+    case Cell.Pad{}:
+      dflt
 
-# the escapes that set st, from a reset
-def Style.esc(+st: Style) -> String:
-  match st:
-    case Style{fg, bg, bold}:
-      T.Tty.reset() ++ Style.esc.fg(fg, U32.is_eq(fg, 256)) ++ Style.esc.bg(bg, U32.is_eq(bg, 256)) ++ Style.esc.bold(bold)
-
-# the escapes for st, or nothing when it is the style already set
-def Style.change(+st: Style, same: Bool) -> String:
-  match same:
-    case True{}:
-      ""
-    case False{}:
-      Style.esc(st)
-
-# a row's cells as text, a style escape only where the style changes
-def row_text(+cs: List<&2, Cell>, +prev: Style) -> String:
+# a row as runs of one look, each painted whole: the text of the run in
+# progress is acc, its look k
+def row_runs(cs: List<&2, Cell>, +p: Pen, +k: Look, +acc: String) -> String:
   match cs:
     case Nil{}:
-      ""
-    case Cell{ch, st} <> t:
-      Style.change(st, Style.is_eq(prev, st)) ++ SCon{Chr{ch}, row_text(t, st)}
+      Look.paint(p, k, acc)
+    case +c <> t:
+      +same = Cell.same_look(c, k)
+      Bool.pick(String, same, "", Look.paint(p, k, acc))
+        ++ row_runs(t, p, Cell.look_of(c, k), Bool.pick(String, same, acc ++ Cell.str(c), Cell.str(c)))
+
+def Row.paint(+p: Pen, cs: List<&2, Cell>) -> String:
+  row_runs(cs, p, Look.plain(), "")
 
 # the row r painted at line y, from a reset to a reset
-def row_at(+y: U32, r: List<&2, Cell>) -> String:
-  T.Tty.goto(1, y) ++ T.Tty.reset() ++ row_text(r, Style.plain()) ++ T.Tty.reset()
+def row_at(+p: Pen, +y: U32, r: List<&2, Cell>) -> String:
+  T.Tty.goto(1, y) ++ T.Tty.reset() ++ Row.paint(p, r) ++ T.Tty.reset()
 
-def Frame.show.go(rows: List<&2, List<&2, Cell>>, +y: U32) -> List<&2, String>:
+def Frame.show.go(rows: List<&2, List<&2, Cell>>, +p: Pen, +y: U32) -> List<&2, String>:
   match rows:
     case Nil{}:
       Nil{}
     case r <> t:
-      row_at(y, r) <> Frame.show.go(t, (y + 1 : U32))
+      row_at(p, y, r) <> Frame.show.go(t, p, (y + 1 : U32))
 
 # every row at its place
-def Frame.show(rows: List<&2, List<&2, Cell>>) -> String:
-  String.concat(Frame.show.go(rows, 1))
+def Frame.show(+p: Pen, rows: List<&2, List<&2, Cell>>) -> String:
+  String.concat(Frame.show.go(rows, p, 1))
 
 def row_eq(a: List<&2, Cell>, b: List<&2, Cell>) -> Bool:
   match a b:
@@ -299,31 +421,31 @@ def row_eq(a: List<&2, Cell>, b: List<&2, Cell>) -> Bool:
     case other1 other2:
       False{}
 
-def Frame.diff.row.if(+n: List<&2, Cell>, +y: U32, same: Bool) -> String:
+def Frame.diff.row.if(+p: Pen, +n: List<&2, Cell>, +y: U32, same: Bool) -> String:
   match same:
     case True{}:
       ""
     case False{}:
-      row_at(y, n)
+      row_at(p, y, n)
 
-def Frame.diff.row(+n: List<&2, Cell>, +p: List<&2, Cell>, +y: U32) -> String:
-  Frame.diff.row.if(n, y, row_eq(n, p))
+def Frame.diff.row(+p: Pen, +n: List<&2, Cell>, +q: List<&2, Cell>, +y: U32) -> String:
+  Frame.diff.row.if(p, n, y, row_eq(n, q))
 
 # the rows of next that differ from prev, each at its place; a row
 # prev does not have is drawn
-def Frame.diff.go(next: List<&2, List<&2, Cell>>, prev: List<&2, List<&2, Cell>>, +y: U32) -> List<&2, String>:
+def Frame.diff.go(next: List<&2, List<&2, Cell>>, prev: List<&2, List<&2, Cell>>, +p: Pen, +y: U32) -> List<&2, String>:
   match next:
     case Nil{}:
       Nil{}
     case n <> nt:
       match prev:
         case Nil{}:
-          row_at(y, n) <> Frame.diff.go(nt, Nil{}, (y + 1 : U32))
-        case p <> pt:
-          Frame.diff.row(n, p, y) <> Frame.diff.go(nt, pt, (y + 1 : U32))
+          row_at(p, y, n) <> Frame.diff.go(nt, Nil{}, p, (y + 1 : U32))
+        case q <> qt:
+          Frame.diff.row(p, n, q, y) <> Frame.diff.go(nt, qt, p, (y + 1 : U32))
 
-def Frame.diff(next: List<&2, List<&2, Cell>>, prev: List<&2, List<&2, Cell>>) -> String:
-  String.concat(Frame.diff.go(next, prev, 1))
+def Frame.diff(+p: Pen, next: List<&2, List<&2, Cell>>, prev: List<&2, List<&2, Cell>>) -> String:
+  String.concat(Frame.diff.go(next, prev, p, 1))
 
 # The app
 # -------
@@ -350,19 +472,12 @@ def Tui.fold(~M: Data, ~step: M -> T.Key -> Maybe<&2, M>, ks: List<&2, T.Key>, n
 # A sample
 # --------
 
-def Frame.plain.row(cs: List<&2, Cell>) -> List<&2, Char>:
-  match cs:
-    case Nil{}:
-      Nil{}
-    case Cell{ch, st} <> t:
-      Chr{ch} <> Frame.plain.row(t)
-
 def Frame.plain(rows: List<&2, List<&2, Cell>>) -> List<&2, String>:
   match rows:
     case Nil{}:
       Nil{}
     case r <> t:
-      String.from_list(Frame.plain.row(r)) <> Frame.plain(t)
+      Row.paint(Pen.plain(), r) <> Frame.plain(t)
 
 def main() -> List<&2, String>:
-  Frame.plain(render(Boxed{"tui", Above{Menu{["one", "two", "three"], 1n}, Progress{1n, 3n, Style.plain()}, 3n}}, 12n, 6n))
+  Frame.plain(render(Boxed{"tui", Above{Menu{["one", "两个", "three"], 1n}, Progress{1n, 3n, Style.plain()}, 3n}}, 12n, 6n))

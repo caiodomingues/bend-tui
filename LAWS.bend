@@ -51,5 +51,6 @@ law render_cols:
 # LAW: a frame diffed against itself writes nothing: an idle screen
 # costs no output
 law diff_self:
+  for +p : U.Pen
   for +f : List<&2, List<&2, U.Cell>>
-  {U.Frame.diff(f, f) == "" : String}
+  {U.Frame.diff(p, f, f) == "" : String}

@@ -3,6 +3,7 @@
 # laws are the fit_rows laws applied to whatever draw gives.
 
 import Base
+import ../bend-tty/color.bend as C
 import ./tui.bend as U
 import ./LAWS.bend as Laws
 import ../bend-lemmas/string.bend as S
@@ -55,24 +56,81 @@ def Laws.render_cols(v, w, h):
 # "", and a concat of empty strings is empty. AllEmpty carries the
 # second fact.
 
-
 def u32_eq_refl(+x: U32) -> {U32.is_eq(x, x) == True{} : Bool}:
   %Equal.sym(Cmp, U32.cmp(x, x), EQ{}, S.u32_cmp_refl(x)) : {Cmp.is_eq(_) == True{} : Bool}
   {==}
 
-def style_eq_refl(+s: U.Style) -> {U.Style.is_eq(s, s) == True{} : Bool}:
+# both sides of an and are true
+def and_tt(+a: Bool, +b: Bool, ea: {a == True{} : Bool}, eb: {b == True{} : Bool}) -> {Bool.and(a, b) == True{} : Bool}:
+  %Equal.sym(Bool, a, True{}, ea) : {Bool.and(_, b) == True{} : Bool}
+  %Equal.sym(Bool, b, True{}, eb) : {Bool.and(True{}, _) == True{} : Bool}
+  {==}
+
+def bool_same_refl(+b: Bool) -> {U.Bool.same(b, b) == True{} : Bool}:
+  %Equal.sym(Cmp, Bool.cmp(b, b), EQ{}, S.bool_cmp_refl(b)) : {Cmp.is_eq(_) == True{} : Bool}
+  {==}
+
+def str_same_refl(+s: String) -> {U.Str.same(s, s) == True{} : Bool}:
   match s:
-    case U.Style{f, b, o}:
-      %Equal.sym(Bool, U32.is_eq(f, f), True{}, u32_eq_refl(f)) : {Bool.and(_, Bool.and(U32.is_eq(b, b), Cmp.is_eq(Bool.cmp(o, o)))) == True{} : Bool}
-      %Equal.sym(Bool, U32.is_eq(b, b), True{}, u32_eq_refl(b)) : {Bool.and(True{}, Bool.and(_, Cmp.is_eq(Bool.cmp(o, o)))) == True{} : Bool}
-      %Equal.sym(Cmp, Bool.cmp(o, o), EQ{}, S.bool_cmp_refl(o)) : {Bool.and(True{}, Bool.and(True{}, Cmp.is_eq(_))) == True{} : Bool}
+    case SNil{}:
       {==}
+    case SCon{Chr{x}, t}:
+      and_tt(U32.is_eq(x, x), U.Str.same(t, t), u32_eq_refl(x), str_same_refl(t))
+
+def color_same_refl(+c: C.Color) -> {U.Color.same(c, c) == True{} : Bool}:
+  match c:
+    case C.Color.Default{}:
+      {==}
+    case C.Color.Basic{x}:
+      u32_eq_refl(x)
+    case C.Color.Ansi256{x}:
+      u32_eq_refl(x)
+    case C.Color.Rgb{r, g, b}:
+      and_tt(U32.is_eq(r, r), Bool.and(U32.is_eq(g, g), U32.is_eq(b, b)), u32_eq_refl(r),
+        and_tt(U32.is_eq(g, g), U32.is_eq(b, b), u32_eq_refl(g), u32_eq_refl(b)))
+
+# the seven modifiers of a style, compared with themselves
+def mods_refl(+x: Bool, +y: Bool, +z: Bool, +u: Bool, +v: Bool, +h: Bool, +t: Bool)
+  -> {Bool.and(U.Bool.same(x, x), Bool.and(U.Bool.same(y, y), Bool.and(U.Bool.same(z, z),
+       Bool.and(U.Bool.same(u, u), Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))) == True{} : Bool}:
+  %Equal.sym(Bool, U.Bool.same(x, x), True{}, bool_same_refl(x)) : {Bool.and(_, Bool.and(U.Bool.same(y, y), Bool.and(U.Bool.same(z, z),
+       Bool.and(U.Bool.same(u, u), Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))) == True{} : Bool}
+  %Equal.sym(Bool, U.Bool.same(y, y), True{}, bool_same_refl(y)) : {Bool.and(True{}, Bool.and(_, Bool.and(U.Bool.same(z, z),
+       Bool.and(U.Bool.same(u, u), Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))) == True{} : Bool}
+  %Equal.sym(Bool, U.Bool.same(z, z), True{}, bool_same_refl(z)) : {Bool.and(True{}, Bool.and(True{}, Bool.and(_,
+       Bool.and(U.Bool.same(u, u), Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))) == True{} : Bool}
+  %Equal.sym(Bool, U.Bool.same(u, u), True{}, bool_same_refl(u)) : {Bool.and(True{}, Bool.and(True{}, Bool.and(True{},
+       Bool.and(_, Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))) == True{} : Bool}
+  %Equal.sym(Bool, U.Bool.same(v, v), True{}, bool_same_refl(v)) : {Bool.and(True{}, Bool.and(True{}, Bool.and(True{},
+       Bool.and(True{}, Bool.and(_, Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))) == True{} : Bool}
+  %Equal.sym(Bool, U.Bool.same(h, h), True{}, bool_same_refl(h)) : {Bool.and(True{}, Bool.and(True{}, Bool.and(True{},
+       Bool.and(True{}, Bool.and(True{}, Bool.and(_, U.Bool.same(t, t))))))) == True{} : Bool}
+  %Equal.sym(Bool, U.Bool.same(t, t), True{}, bool_same_refl(t)) : {Bool.and(True{}, Bool.and(True{}, Bool.and(True{},
+       Bool.and(True{}, Bool.and(True{}, Bool.and(True{}, _)))))) == True{} : Bool}
+  {==}
+
+def style_same_refl(+s: C.Style) -> {U.Style.same(s, s) == True{} : Bool}:
+  match s:
+    case C.Style{f, b, x, y, z, u, v, h, t}:
+      %Equal.sym(Bool, U.Color.same(f, f), True{}, color_same_refl(f)) : {Bool.and(_, Bool.and(U.Color.same(b, b), Bool.and(U.Bool.same(x, x), Bool.and(U.Bool.same(y, y), Bool.and(U.Bool.same(z, z),
+         Bool.and(U.Bool.same(u, u), Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))))) == True{} : Bool}
+      %Equal.sym(Bool, U.Color.same(b, b), True{}, color_same_refl(b)) : {Bool.and(True{}, Bool.and(_, Bool.and(U.Bool.same(x, x), Bool.and(U.Bool.same(y, y), Bool.and(U.Bool.same(z, z),
+         Bool.and(U.Bool.same(u, u), Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))))) == True{} : Bool}
+      %Equal.sym(Bool, Bool.and(U.Bool.same(x, x), Bool.and(U.Bool.same(y, y), Bool.and(U.Bool.same(z, z),
+         Bool.and(U.Bool.same(u, u), Bool.and(U.Bool.same(v, v), Bool.and(U.Bool.same(h, h), U.Bool.same(t, t))))))), True{}, mods_refl(x, y, z, u, v, h, t))
+        : {Bool.and(True{}, Bool.and(True{}, _)) == True{} : Bool}
+      {==}
+
+def look_eq_refl(+k: U.Look) -> {U.Look.is_eq(k, k) == True{} : Bool}:
+  match k:
+    case U.Look.Of{st, link}:
+      and_tt(U.Style.same(st, st), U.Str.same(link, link), style_same_refl(st), str_same_refl(link))
 
 def cell_eq_refl(+c: U.Cell) -> {U.Cell.is_eq(c, c) == True{} : Bool}:
   match c:
-    case U.Cell{ch, st}:
-      %Equal.sym(Bool, U32.is_eq(ch, ch), True{}, u32_eq_refl(ch)) : {Bool.and(_, U.Style.is_eq(st, st)) == True{} : Bool}
-      %Equal.sym(Bool, U.Style.is_eq(st, st), True{}, style_eq_refl(st)) : {Bool.and(True{}, _) == True{} : Bool}
+    case U.Cell.Of{g, k}:
+      and_tt(U.Str.same(g, g), U.Look.is_eq(k, k), str_same_refl(g), look_eq_refl(k))
+    case U.Cell.Pad{}:
       {==}
 
 def row_eq_refl(+r: List<&2, U.Cell>) -> {U.row_eq(r, r) == True{} : Bool}:
@@ -80,12 +138,10 @@ def row_eq_refl(+r: List<&2, U.Cell>) -> {U.row_eq(r, r) == True{} : Bool}:
     case Nil{}:
       {==}
     case x <> t:
-      %Equal.sym(Bool, U.Cell.is_eq(x, x), True{}, cell_eq_refl(x)) : {Bool.and(_, U.row_eq(t, t)) == True{} : Bool}
-      %Equal.sym(Bool, U.row_eq(t, t), True{}, row_eq_refl(t)) : {Bool.and(True{}, _) == True{} : Bool}
-      {==}
+      and_tt(U.Cell.is_eq(x, x), U.row_eq(t, t), cell_eq_refl(x), row_eq_refl(t))
 
-def diff_row_self(+n: List<&2, U.Cell>, +y: U32) -> {U.Frame.diff.row(n, n, y) == "" : String}:
-  %Equal.sym(Bool, U.row_eq(n, n), True{}, row_eq_refl(n)) : {U.Frame.diff.row.if(n, y, _) == "" : String}
+def diff_row_self(+p: U.Pen, +n: List<&2, U.Cell>, +y: U32) -> {U.Frame.diff.row(p, n, n, y) == "" : String}:
+  %Equal.sym(Bool, U.row_eq(n, n), True{}, row_eq_refl(n)) : {U.Frame.diff.row.if(p, n, y, _) == "" : String}
   {==}
 
 # AllEmpty(xs): every string in xs is ""
@@ -96,12 +152,12 @@ def AllEmpty(xs: List<&2, String>) -> Type:
     case x <> t:
       ({x == "" : String} & AllEmpty(t))
 
-def diff_go_self(+f: List<&2, List<&2, U.Cell>>, +y: U32) -> AllEmpty(U.Frame.diff.go(f, f, y)):
+def diff_go_self(+f: List<&2, List<&2, U.Cell>>, +p: U.Pen, +y: U32) -> AllEmpty(U.Frame.diff.go(f, f, p, y)):
   match f:
     case Nil{}:
       Unit{}
     case n <> t:
-      (diff_row_self(n, y), diff_go_self(t, (y + 1 : U32)))
+      (diff_row_self(p, n, y), diff_go_self(t, p, (y + 1 : U32)))
 
 def concat_empty(+xs: List<&2, String>, e: AllEmpty(xs)) -> {String.concat(xs) == "" : String}:
   match xs:
@@ -113,5 +169,5 @@ def concat_empty(+xs: List<&2, String>, e: AllEmpty(xs)) -> {String.concat(xs) =
       %Equal.sym(String, h, "", eh) : {String.append(_, "") == "" : String}
       {==}
 
-def Laws.diff_self(f):
-  concat_empty(U.Frame.diff.go(f, f, 1), diff_go_self(f, 1))
+def Laws.diff_self(p, f):
+  concat_empty(U.Frame.diff.go(f, f, p, 1), diff_go_self(f, p, 1))

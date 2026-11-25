@@ -10,6 +10,7 @@
 
 import Base
 import ../bend-tty/tty.bend as T
+import ../bend-tty/color.bend as C
 import ../bend-tty/tty_io.bend as IOT
 import ./tui.bend as U
 
@@ -89,26 +90,27 @@ def Tui.prev(prev: List<&2, List<&2, U.Cell>>, same: Bool) -> List<&2, List<&2, 
     case False{}:
       Nil{}
 
-def Tui.step(-M: Data, app: U.Tui<M>, wh: U32 & U32, +lw: U32, +lh: U32, prev: List<&2, List<&2, U.Cell>>, +m: M, +ms: U32, rest: U32 -> U32 -> List<&2, List<&2, U.Cell>> -> M -> IO(Unit)) -> IO(Unit):
+def Tui.step(-M: Data, app: U.Tui<M>, +pen: U.Pen, wh: U32 & U32, +lw: U32, +lh: U32, prev: List<&2, List<&2, U.Cell>>, +m: M, +ms: U32, rest: U32 -> U32 -> List<&2, List<&2, U.Cell>> -> M -> IO(Unit)) -> IO(Unit):
   U.Tui{view, update} = app
   (+w, +h) = wh
   +frame = U.render(view(m), U32.to_nat(w), U32.to_nat(h))
   do IO<Unit>:
-    IO.write(U.Frame.diff(frame, Tui.prev(prev, Bool.and(U32.is_eq(w, lw), U32.is_eq(h, lh)))))
+    IO.write(U.Frame.diff(pen, frame, Tui.prev(prev, Bool.and(U32.is_eq(w, lw), U32.is_eq(h, lh)))))
     got : Maybe<&2, List<&2, U32>> <- IOT.Tty.read(ms, 4096)
     Tui.read(M, frame, update, m, got, rest(w, h))
 
-def Tui.loop(~M: Data, ~app: U.Tui<M>, fuel: Nat, lw: U32, lh: U32, prev: List<&2, List<&2, U.Cell>>, m: M, +ms: U32) -> IO(Unit):
+def Tui.loop(~M: Data, ~app: U.Tui<M>, fuel: Nat, +pen: U.Pen, lw: U32, lh: U32, prev: List<&2, List<&2, U.Cell>>, m: M, +ms: U32) -> IO(Unit):
   match fuel:
     case 0n:
       Tui.quit()
     case 1n+f:
       do IO<Unit>:
         wh : U32 & U32 <- IOT.Tty.size()
-        Tui.step(M, app, wh, lw, lh, prev, m, ms, w2 => h2 => p2 => m2 => Tui.loop(~M, ~app, f, w2, h2, p2, m2, ms))
+        Tui.step(M, app, pen, wh, lw, lh, prev, m, ms, w2 => h2 => p2 => m2 => Tui.loop(~M, ~app, f, pen, w2, h2, p2, m2, ms))
 
 def Tui.run(~M: Data, ~app: U.Tui<M>, m0: M, ms: U32) -> IO(Unit):
   do IO<Unit>:
     IOT.Tty.raw(True{})
     IO.write(T.Tty.alt(True{}) ++ T.Tty.cursor(False{}) ++ T.Tty.clear())
-    Tui.loop(~M, ~app, U32.to_nat(4294967295), 0, 0, Nil{}, m0, ms)
+    l : C.Level <- IOT.Tty.level(1)
+    Tui.loop(~M, ~app, U32.to_nat(4294967295), U.Pen{l, True{}}, 0, 0, Nil{}, m0, ms)
