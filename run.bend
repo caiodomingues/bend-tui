@@ -280,6 +280,13 @@ def Cli.mode(raw: Bool, want: Bool, live: Bool) -> IO(Unit):
     case r w:
       IO.pure(Unit, Unit{})
 
+def Cli.inline(live: Bool, on: Bool) -> IO(Unit):
+  match live:
+    case True{}:
+      IOT.Tty.inline(on)
+    case False{}:
+      IO.pure(Unit, Unit{})
+
 def Cli.unraw(raw: Bool) -> IO(Unit):
   match raw:
     case True{}:
@@ -305,6 +312,7 @@ def Cli.end(-M: Data, -Msg: Data, app: U.Cli<M, Msg>, +st: U.Inline, +m: M, raw:
   do IO<M>:
     IO.write(U.Inline.end(st, view(m)) ++ Cli.show(Cli.live_of(st)))
     Cli.unraw(raw)
+    Cli.inline(Cli.live_of(st), False{})
     return m
 
 def Cli.after.go(-M: Data, m: M, st: U.Inline, raw: Bool, stop: Bool,
@@ -351,6 +359,7 @@ def Cli.loop(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, fuel: Nat, +ch: Chan(U.E
 def Cli.start(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, +live: Bool, l: C.Level, wh: U32 & U32, +ch: Chan(U.Ev<Msg>), m0: M, +tick: U32) -> IO(M):
   (w, h) = wh
   do IO<M>:
+    Cli.inline(live, True{})
     IO.write(Cli.hide(live))
     Cli.loop(~M, ~Msg, ~app, U32.to_nat(4294967295), ch, U.Inline.new(live, U.Pen{l, live}, U32.to_nat(w), U32.to_nat(h)), m0, False{}, tick)
 
