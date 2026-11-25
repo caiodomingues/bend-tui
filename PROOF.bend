@@ -171,3 +171,63 @@ def concat_empty(+xs: List<&2, String>, e: AllEmpty(xs)) -> {String.concat(xs) =
 
 def Laws.diff_self(p, f):
   concat_empty(U.Frame.diff.go(f, f, p, 1), diff_go_self(f, p, 1))
+
+# The inline laws: a redraw starts at the first changed line, and the
+# same lines have none (str_same_refl line by line); the done views
+# left to write are a drop by the count already written, which is
+# empty for the same list and the added views for a longer one.
+
+def Laws.lines_first_same(ls, i):
+  match ls:
+    case Nil{}:
+      {==}
+    case h <> t:
+      %Equal.sym(Bool, U.Str.same(h, h), True{}, str_same_refl(h)) : {U.Lines.first.at(_, U.Lines.first(t, t, 1n+i), i) == None{} : Maybe<&2, Nat>}
+      %Equal.sym(Maybe<&2, Nat>, U.Lines.first(t, t, 1n+i), None{}, Laws.lines_first_same(t, 1n+i)) : {U.Lines.first.at(True{}, _, i) == None{} : Maybe<&2, Nat>}
+      {==}
+
+def write_same(+tty: Bool, +ls: List<&2, String>) -> {U.Inline.write(tty, ls, Nil{}, ls) == "" : String}:
+  match tty:
+    case True{}:
+      %Equal.sym(Maybe<&2, Nat>, U.Lines.first(ls, ls, 0n), None{}, Laws.lines_first_same(ls, 0n)) : {U.Inline.sync(U.Inline.redraw(List.length(&2, String, ls), _, ls)) == "" : String}
+      {==}
+    case False{}:
+      {==}
+
+def drop_len(+xs: List<&2, U.View>) -> {List.drop(&2, U.View, xs, List.length(&2, U.View, xs)) == Nil{} : List<&2, U.View>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case h <> t:
+      drop_len(t)
+
+def drop_zero(+ys: List<&2, U.View>) -> {List.drop(&2, U.View, ys, 0n) == ys : List<&2, U.View>}:
+  match ys:
+    case Nil{}:
+      {==}
+    case h <> t:
+      {==}
+
+def drop_len_append(+xs: List<&2, U.View>, +ys: List<&2, U.View>) -> {List.drop(&2, U.View, List.append(&2, U.View, xs, ys), List.length(&2, U.View, xs)) == ys : List<&2, U.View>}:
+  match xs:
+    case Nil{}:
+      drop_zero(ys)
+    case h <> t:
+      drop_len_append(t, ys)
+
+def Laws.inline_same(st, s):
+  match st:
+    case U.Inline{tty, p, w, rows, prev, printed}:
+      match s:
+        case U.Screen{done, live}:
+          %Equal.sym(List<&2, U.View>, List.drop(&2, U.View, done, List.length(&2, U.View, done)), Nil{}, drop_len(done))
+            : {U.Inline.write(tty, U.Inline.clip(rows, U.View.lines(p, live, w)), U.Views.lines(p, _, w), U.Inline.clip(rows, U.View.lines(p, live, w))) == "" : String}
+          write_same(tty, U.Inline.clip(rows, U.View.lines(p, live, w)))
+
+def Laws.static_once(st, done, more, live):
+  match st:
+    case U.Inline{tty, p, w, rows, prev, printed}:
+      drop_len_append(done, more)
+
+def Laws.pipe_plain(prev, fresh, next):
+  {==}

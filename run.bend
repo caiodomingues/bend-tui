@@ -114,3 +114,253 @@ def Tui.run(~M: Data, ~app: U.Tui<M>, m0: M, ms: U32) -> IO(Unit):
     IO.write(T.Tty.alt(True{}) ++ T.Tty.cursor(False{}) ++ T.Tty.clear())
     l : C.Level <- IOT.Tty.level(1)
     Tui.loop(~M, ~app, U32.to_nat(4294967295), U.Pen{l, True{}}, 0, 0, Nil{}, m0, ms)
+
+# The CLI loop
+# ------------
+# Cli.run(~M, ~Msg, ~app, m0, work, tick) draws inline, in the normal
+# screen, and answers the last state. work runs as its own computation
+# and posts messages (Cli.post); each turn takes one event, the next
+# message, or the keys while app.keys(m) holds (raw mode on only then),
+# or a tick when nothing came within tick ms, and hands it to update.
+# Ctrl-C is Ev.Cancel, and the loop stops after it whatever update
+# answers. The output is a live terminal when stdout is one, TERM is
+# not dumb and CI is unset; otherwise nothing moves the cursor.
+
+def Cli.post(-Msg: Data, ch: Chan(U.Ev<Msg>), m: Msg) -> IO(Unit):
+  do IO<Unit>:
+    r : Result<&1, &1, U.Ev<Msg>, Unit> <- Chan.send(U.Ev<Msg>, ch, U.Ev.Msg{m})
+    IO.pure(Unit, Unit{})
+
+def Cli.work(-Msg: Data, +ch: Chan(U.Ev<Msg>), work: Chan(U.Ev<Msg>) -> IO(Unit)) -> IO(Unit):
+  do IO<Unit>:
+    work(ch)
+    r : Result<&1, &1, U.Ev<Msg>, Unit> <- Chan.send(U.Ev<Msg>, ch, U.Ev.Done{})
+    IO.pure(Unit, Unit{})
+
+# no work: for a loop that only asks
+def Cli.none(-Msg: Data, ch: Chan(U.Ev<Msg>)) -> IO(Unit):
+  IO.pure(Unit, Unit{})
+
+def Cli.is(r: Result<&1, &1, U32 & String, String>, +v: String) -> Bool:
+  match r:
+    case Done{x}:
+      String.eq(x, v)
+    case Fail{e}:
+      False{}
+
+# CI set to anything but "", "0" or "false"
+def Cli.ci(r: Result<&1, &1, U32 & String, String>) -> Bool:
+  match r:
+    case Done{+x}:
+      Bool.not(Bool.or(String.eq(x, ""), Bool.or(String.eq(x, "0"), String.eq(x, "false"))))
+    case Fail{e}:
+      False{}
+
+def Cli.live(tty: Bool, term: Result<&1, &1, U32 & String, String>, ci: Result<&1, &1, U32 & String, String>) -> Bool:
+  Bool.and(tty, Bool.and(Bool.not(Cli.is(term, "dumb")), Bool.not(Cli.ci(ci))))
+
+def Cli.found(-Msg: Data, r: Maybe<&1, U.Ev<Msg>>) -> U.Ev<Msg>:
+  match r:
+    case Some{e}:
+      e
+    case None{}:
+      U.Ev.Tick{}
+
+def Cli.polled(-Msg: Data, p: Poll<&1, &1, Maybe<&1, U.Ev<Msg>>, Unit>) -> U.Ev<Msg>:
+  match p:
+    case Ready{r}:
+      Cli.found(Msg, r)
+    case Wait{u}:
+      U.Ev.Tick{}
+
+def Cli.keys.if(-Msg: Data, +ks: List<&2, T.Key>, stop: Bool) -> U.Ev<Msg>:
+  match stop:
+    case True{}:
+      U.Ev.Cancel{}
+    case False{}:
+      U.Ev.Keys{ks}
+
+def Cli.keys(-Msg: Data, bs: List<&2, U32>) -> U.Ev<Msg>:
+  +ks = T.Tty.keys(bs)
+  Cli.keys.if(Msg, ks, Tui.ctrl_c(ks))
+
+def Cli.more(-Msg: Data, bs: List<&2, U32>, got2: Maybe<&2, List<&2, U32>>) -> U.Ev<Msg>:
+  match got2:
+    case None{}:
+      U.Ev.Cancel{}
+    case Some{bs2}:
+      Cli.keys(Msg, List.append(&2, U32, bs, bs2))
+
+def Cli.split(-Msg: Data, bs: List<&2, U32>, split: Bool) -> IO(U.Ev<Msg>):
+  match split:
+    case False{}:
+      IO.pure(U.Ev<Msg>, Cli.keys(Msg, bs))
+    case True{}:
+      do IO<U.Ev<Msg>>:
+        got2 : Maybe<&2, List<&2, U32>> <- IOT.Tty.read(100, 4096)
+        return Cli.more(Msg, bs, got2)
+
+def Cli.empty(bs: List<&2, U32>) -> Bool:
+  match bs:
+    case Nil{}:
+      True{}
+    case b <> t:
+      False{}
+
+def Cli.bytes(-Msg: Data, +bs: List<&2, U32>, none: Bool) -> IO(U.Ev<Msg>):
+  match none:
+    case True{}:
+      IO.pure(U.Ev<Msg>, U.Ev.Tick{})
+    case False{}:
+      Cli.split(Msg, bs, Tui.split_esc(bs))
+
+# a read's answer: the end of the input cancels, nothing is a tick
+def Cli.got(-Msg: Data, got: Maybe<&2, List<&2, U32>>) -> IO(U.Ev<Msg>):
+  match got:
+    case None{}:
+      IO.pure(U.Ev<Msg>, U.Ev.Cancel{})
+    case Some{+bs}:
+      Cli.bytes(Msg, bs, Cli.empty(bs))
+
+def Cli.read(-Msg: Data, +tick: U32) -> IO(U.Ev<Msg>):
+  do IO<U.Ev<Msg>>:
+    got : Maybe<&2, List<&2, U32>> <- IOT.Tty.read(tick, 4096)
+    Cli.got(Msg, got)
+
+def Cli.waiting(-Msg: Data, r: Maybe<&1, U.Ev<Msg>>, +tick: U32) -> IO(U.Ev<Msg>):
+  match r:
+    case Some{e}:
+      IO.pure(U.Ev<Msg>, e)
+    case None{}:
+      Cli.read(Msg, tick)
+
+# a message already waiting goes first; else the keys of one read
+def Cli.keys_or(-Msg: Data, p: Poll<&1, &1, Maybe<&1, U.Ev<Msg>>, Unit>, +tick: U32) -> IO(U.Ev<Msg>):
+  match p:
+    case Ready{r}:
+      Cli.waiting(Msg, r, tick)
+    case Wait{u}:
+      Cli.read(Msg, tick)
+
+def Cli.event(-Msg: Data, +ch: Chan(U.Ev<Msg>), want: Bool, +tick: U32) -> IO(U.Ev<Msg>):
+  match want:
+    case False{}:
+      do IO<U.Ev<Msg>>:
+        p : Poll<&1, &1, Maybe<&1, U.Ev<Msg>>, Unit> <- Chan.try_recv(U.Ev<Msg>, ch, tick)
+        return Cli.polled(Msg, p)
+    case True{}:
+      do IO<U.Ev<Msg>>:
+        p : Poll<&1, &1, Maybe<&1, U.Ev<Msg>>, Unit> <- Chan.try_recv(U.Ev<Msg>, ch, 0)
+        Cli.keys_or(Msg, p, tick)
+
+def Cli.hide(live: Bool) -> String:
+  match live:
+    case True{}:
+      T.Tty.cursor(False{})
+    case False{}:
+      ""
+
+def Cli.show(live: Bool) -> String:
+  match live:
+    case True{}:
+      T.Tty.cursor(True{})
+    case False{}:
+      ""
+
+# raw mode as the view wants it; leaving raw mode shows the cursor, so
+# a live output hides it again
+def Cli.mode(raw: Bool, want: Bool, live: Bool) -> IO(Unit):
+  match raw want:
+    case False{} True{}:
+      IOT.Tty.raw(True{})
+    case True{} False{}:
+      do IO<Unit>:
+        IOT.Tty.raw(False{})
+        IO.write(Cli.hide(live))
+    case r w:
+      IO.pure(Unit, Unit{})
+
+def Cli.unraw(raw: Bool) -> IO(Unit):
+  match raw:
+    case True{}:
+      IOT.Tty.raw(False{})
+    case False{}:
+      IO.pure(Unit, Unit{})
+
+def Cli.is_cancel(-Msg: Data, e: U.Ev<Msg>) -> Bool:
+  match e:
+    case U.Ev.Cancel{}:
+      True{}
+    case other:
+      False{}
+
+def Cli.live_of(st: U.Inline) -> Bool:
+  match st:
+    case U.Inline{tty, p, w, rows, prev, printed}:
+      tty
+
+# the last frame written whole, the cursor shown, raw mode off
+def Cli.end(-M: Data, -Msg: Data, app: U.Cli<M, Msg>, +st: U.Inline, +m: M, raw: Bool) -> IO(M):
+  U.Cli{view, update, keys} = app
+  do IO<M>:
+    IO.write(U.Inline.end(st, view(m)) ++ Cli.show(Cli.live_of(st)))
+    Cli.unraw(raw)
+    return m
+
+def Cli.after.go(-M: Data, m: M, st: U.Inline, raw: Bool, stop: Bool,
+                 go: U.Inline -> M -> Bool -> IO(M), fin: U.Inline -> M -> Bool -> IO(M)) -> IO(M):
+  match stop:
+    case True{}:
+      fin(st, m, raw)
+    case False{}:
+      go(st, m, raw)
+
+def Cli.after(-M: Data, s: U.Step<M>, st: U.Inline, raw: Bool, stop: Bool,
+              go: U.Inline -> M -> Bool -> IO(M), fin: U.Inline -> M -> Bool -> IO(M)) -> IO(M):
+  match s:
+    case U.Step.Go{m}:
+      Cli.after.go(M, m, st, raw, stop, go, fin)
+    case U.Step.End{m}:
+      fin(st, m, raw)
+
+def Cli.step(-M: Data, -Msg: Data, app: U.Cli<M, Msg>, +ch: Chan(U.Ev<Msg>), +st: U.Inline, wh: U32 & U32, +m: M, raw: Bool, +tick: U32,
+             go: U.Inline -> M -> Bool -> IO(M), fin: U.Inline -> M -> Bool -> IO(M)) -> IO(M):
+  U.Cli{view, update, keys} = app
+  (+w, +h) = wh
+  +want = keys(m)
+  +live = Cli.live_of(st)
+  +o1 = U.Inline.resize(st, U32.to_nat(w), U32.to_nat(h))
+  +o2 = U.Inline.draw(U.Inline.next(o1), view(m))
+  do IO<M>:
+    IO.write(U.Inline.text(o1) ++ U.Inline.text(o2))
+    Cli.mode(raw, want, live)
+    +ev : U.Ev<Msg> <- Cli.event(Msg, ch, want, tick)
+    Cli.after(M, update(ev, m), U.Inline.next(o2), want, Cli.is_cancel(Msg, ev), go, fin)
+
+def Cli.loop(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, fuel: Nat, +ch: Chan(U.Ev<Msg>), st: U.Inline, m: M, raw: Bool, +tick: U32) -> IO(M):
+  match fuel:
+    case 0n:
+      Cli.end(M, Msg, app, st, m, raw)
+    case 1n+f:
+      do IO<M>:
+        wh : U32 & U32 <- IOT.Tty.size()
+        Cli.step(M, Msg, app, ch, st, wh, m, raw, tick,
+          s2 => m2 => r2 => Cli.loop(~M, ~Msg, ~app, f, ch, s2, m2, r2, tick),
+          s2 => m2 => r2 => Cli.end(M, Msg, app, s2, m2, r2))
+
+def Cli.start(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, +live: Bool, l: C.Level, wh: U32 & U32, +ch: Chan(U.Ev<Msg>), m0: M, +tick: U32) -> IO(M):
+  (w, h) = wh
+  do IO<M>:
+    IO.write(Cli.hide(live))
+    Cli.loop(~M, ~Msg, ~app, U32.to_nat(4294967295), ch, U.Inline.new(live, U.Pen{l, live}, U32.to_nat(w), U32.to_nat(h)), m0, False{}, tick)
+
+def Cli.run(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, m0: M, work: Chan(U.Ev<Msg>) -> IO(Unit), tick: U32) -> IO(M):
+  do IO<M>:
+    tty : Bool <- IOT.Tty.isatty(1)
+    term : Result<&1, &1, U32 & String, String> <- IO.get_env("TERM")
+    ci : Result<&1, &1, U32 & String, String> <- IO.get_env("CI")
+    l : C.Level <- IOT.Tty.level(1)
+    wh : U32 & U32 <- IOT.Tty.size()
+    +ch : Chan(U.Ev<Msg>) <- Chan.new(U.Ev<Msg>, 64)
+    IO.spawn(Unit, Cli.work(Msg, ch, work))
+    Cli.start(~M, ~Msg, ~app, Cli.live(tty, term, ci), l, wh, ch, m0, tick)

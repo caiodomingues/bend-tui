@@ -54,3 +54,33 @@ law diff_self:
   for +p : U.Pen
   for +f : List<&2, List<&2, U.Cell>>
   {U.Frame.diff(p, f, f) == "" : String}
+
+# LAW: two lists of the same lines have no first difference
+law lines_first_same:
+  for +ls : List<&2, String>
+  for +i  : Nat
+  {U.Lines.first(ls, ls, i) == None{} : Maybe<&2, Nat>}
+
+# LAW: drawing a screen again, unchanged, writes nothing: an idle CLI
+# costs no output, on a terminal or not
+law inline_same:
+  for +st : U.Inline
+  for +s  : U.Screen
+  {U.Inline.text(U.Inline.draw(U.Inline.next(U.Inline.draw(st, s)), s)) == "" : String}
+
+# LAW: after a draw, the done views still to write are exactly those
+# added since: each done view is written once
+law static_once:
+  for +st   : U.Inline
+  for +done : List<&2, U.View>
+  for +more : List<&2, U.View>
+  for +live : U.View
+  {U.Inline.fresh(U.Inline.printed(U.Inline.next(U.Inline.draw(st, U.Screen{done, live}))), List.append(&2, U.View, done, more)) == more : List<&2, U.View>}
+
+# LAW: with no terminal, a draw writes the new done lines and nothing
+# else: no cursor movement, no live frame
+law pipe_plain:
+  for +prev  : List<&2, String>
+  for +fresh : List<&2, String>
+  for +next  : List<&2, String>
+  {U.Inline.write(False{}, prev, fresh, next) == U.Lines.join(fresh, "\n") : String}

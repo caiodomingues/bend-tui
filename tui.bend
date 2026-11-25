@@ -469,6 +469,265 @@ def Tui.fold(~M: Data, ~step: M -> T.Key -> Maybe<&2, M>, ks: List<&2, T.Key>, n
         case Some{m}:
           Tui.fold(~M, ~step, rest, step(m, k))
 
+# Inline frames
+# -------------
+# A CLI draws in the normal screen, under what it printed, as Ink does:
+# a frame as tall as its content, the cursor resting at the start of the
+# row below it. Lines above the frame that are printed once (Ink's
+# Static) are the screen's done views; the live view is redrawn from
+# the first line that changed. With no terminal, nothing moves the
+# cursor: done lines are written as they come, the live frame once at
+# the end.
+
+# the rows a view takes at width w when nothing bounds its height
+def View.height(+v: View, +w: Nat) -> Nat:
+  match v:
+    case View.Text{st, s}:
+      1n
+    case Lines{st, ls}:
+      List.length(&2, String, ls)
+    case Fill{c}:
+      1n
+    case Above{top, bottom, rows}:
+      Nat.add(rows, View.height(bottom, w))
+    case Below{top, bottom, rows}:
+      Nat.add(View.height(top, w), rows)
+    case Beside{left, right, cols}:
+      Nat.max(View.height(left, cols), View.height(right, Nat.sub(w, cols)))
+    case After{left, right, cols}:
+      Nat.max(View.height(left, Nat.sub(w, cols)), View.height(right, cols))
+    case Split{left, right, num, den}:
+      +cols = Nat.div(Nat.mul(w, num), Nat.max(den, 1n))
+      Nat.max(View.height(left, cols), View.height(right, Nat.sub(w, cols)))
+    case Stack{top, bottom, num, den}:
+      Nat.add(View.height(top, w), View.height(bottom, w))
+    case Boxed{title, child}:
+      2n+View.height(child, Nat.sub(w, 2n))
+    case Menu{items, sel}:
+      List.length(&2, String, items)
+    case Input{text, cursor}:
+      1n
+    case Progress{done, total, st}:
+      1n
+
+def Row.empty(cs: List<&2, Cell>) -> Bool:
+  match cs:
+    case Nil{}:
+      True{}
+    case c <> t:
+      False{}
+
+def Row.keep(c: Cell, rest: List<&2, Cell>, gone: Bool) -> List<&2, Cell>:
+  match gone:
+    case True{}:
+      Nil{}
+    case False{}:
+      c <> rest
+
+# the row without its trailing blanks, which a terminal shows anyway
+def Row.trim(cs: List<&2, Cell>) -> List<&2, Cell>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case +c <> t:
+      +rest = Row.trim(t)
+      Row.keep(c, rest, Bool.and(Row.empty(rest), Cell.is_eq(c, Cell.blank())))
+
+def Rows.paint(+p: Pen, rows: List<&2, List<&2, Cell>>) -> List<&2, String>:
+  match rows:
+    case Nil{}:
+      Nil{}
+    case r <> t:
+      Row.paint(p, Row.trim(r)) <> Rows.paint(p, t)
+
+# a view's lines at width w and its own height, painted
+def View.lines(+p: Pen, +v: View, +w: Nat) -> List<&2, String>:
+  Rows.paint(p, render(v, w, View.height(v, w)))
+
+def Views.lines(+p: Pen, vs: List<&2, View>, +w: Nat) -> List<&2, String>:
+  match vs:
+    case Nil{}:
+      Nil{}
+    case v <> t:
+      List.append(&2, String, View.lines(p, v, w), Views.lines(p, t, w))
+
+type Screen is Data:
+  Screen{done: List<&2, View>, live: View}
+
+# what an inline renderer remembers: whether it may move the cursor,
+# how it paints, the terminal's width and rows, the live lines on
+# screen and how many done views it wrote
+type Inline is Data:
+  Inline{tty: Bool, pen: Pen, w: Nat, rows: Nat, prev: List<&2, String>, printed: Nat}
+
+type Inline.Out is Data:
+  Inline.Out{text: String, next: Inline}
+
+def Inline.new(tty: Bool, p: Pen, w: Nat, rows: Nat) -> Inline:
+  Inline{tty, p, w, rows, Nil{}, 0n}
+
+def Inline.text(o: Inline.Out) -> String:
+  match o:
+    case Inline.Out{t, n}:
+      t
+
+def Inline.next(o: Inline.Out) -> Inline:
+  match o:
+    case Inline.Out{t, n}:
+      n
+
+def Inline.printed(st: Inline) -> Nat:
+  match st:
+    case Inline{tty, p, w, rows, prev, printed}:
+      printed
+
+def Str.cr() -> String:
+  SCon{Chr{13}, SNil{}}
+
+# a line break on a terminal: CR LF, so a line starts at column 1
+# whatever the terminal's output modes
+def Str.crlf() -> String:
+  SCon{Chr{13}, SCon{Chr{10}, SNil{}}}
+
+def Lines.join(ls: List<&2, String>, +nl: String) -> String:
+  match ls:
+    case Nil{}:
+      ""
+    case l <> t:
+      l ++ nl ++ Lines.join(t, nl)
+
+def Lines.first.at(same: Bool, rest: Maybe<&2, Nat>, +i: Nat) -> Maybe<&2, Nat>:
+  match same:
+    case True{}:
+      rest
+    case False{}:
+      Some{i}
+
+# the index of the first line where next differs from prev, counting
+# from i; None when they are the same lines
+def Lines.first(prev: List<&2, String>, next: List<&2, String>, +i: Nat) -> Maybe<&2, Nat>:
+  match prev next:
+    case Nil{} Nil{}:
+      None{}
+    case Nil{} n <> nt:
+      Some{i}
+    case p <> pt Nil{}:
+      Some{i}
+    case p <> pt n <> nt:
+      Lines.first.at(Str.same(p, n), Lines.first(pt, nt, 1n+i), i)
+
+# the last keep lines
+def Lines.last(+ls: List<&2, String>, +keep: Nat) -> List<&2, String>:
+  List.drop(&2, String, ls, Nat.sub(List.length(&2, String, ls), keep))
+
+# s inside synchronized output; nothing when s is empty
+def Inline.sync(s: String) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{h, t}:
+      T.Tty.sync(True{}) ++ SCon{h, t} ++ T.Tty.sync(False{})
+
+# from the row below a frame of n lines up to its row k, column 1
+def Inline.rise(+n: Nat, +k: Nat) -> String:
+  T.Tty.up(U32.from_nat(Nat.sub(n, k))) ++ Str.cr()
+
+def Inline.redraw(+n: Nat, at: Maybe<&2, Nat>, +next: List<&2, String>) -> String:
+  match at:
+    case None{}:
+      ""
+    case Some{+k}:
+      Inline.rise(n, k) ++ T.Tty.erase_down() ++ Lines.join(List.drop(&2, String, next, k), Str.crlf())
+
+def Inline.write.tty(+prev: List<&2, String>, fresh: List<&2, String>, +next: List<&2, String>) -> String:
+  match fresh:
+    case Nil{}:
+      Inline.sync(Inline.redraw(List.length(&2, String, prev), Lines.first(prev, next, 0n), next))
+    case f <> ft:
+      Inline.sync(Inline.rise(List.length(&2, String, prev), 0n) ++ T.Tty.erase_down()
+        ++ Lines.join(f <> ft, Str.crlf()) ++ Lines.join(next, Str.crlf()))
+
+# what a draw writes, from the live lines on screen (prev), the done
+# lines not yet written (fresh) and the live lines now (next): on a
+# terminal, the fresh lines go above a whole new frame, or else the
+# frame is redrawn from its first changed line; with no terminal, the
+# fresh lines alone
+def Inline.write(tty: Bool, +prev: List<&2, String>, fresh: List<&2, String>, +next: List<&2, String>) -> String:
+  match tty:
+    case True{}:
+      Inline.write.tty(prev, fresh, next)
+    case False{}:
+      Lines.join(fresh, "\n")
+
+def Inline.fresh(+printed: Nat, done: List<&2, View>) -> List<&2, View>:
+  List.drop(&2, View, done, printed)
+
+# a frame taller than the terminal shows its last rows - 1 lines: rows
+# that scrolled away cannot be reached to be redrawn
+def Inline.clip(+rows: Nat, ls: List<&2, String>) -> List<&2, String>:
+  Lines.last(ls, Nat.sub(Nat.max(rows, 2n), 1n))
+
+def Inline.draw(st: Inline, s: Screen) -> Inline.Out:
+  match st s:
+    case Inline{+tty, +p, +w, +rows, prev, printed} Screen{+done, live}:
+      +next = Inline.clip(rows, View.lines(p, live, w))
+      Inline.Out{Inline.write(tty, prev, Views.lines(p, Inline.fresh(printed, done), w), next),
+                 Inline{tty, p, w, rows, next, List.length(&2, View, done)}}
+
+# what ends the output: the last done lines and the whole final frame,
+# unclipped, so the scrollback holds all of it
+def Inline.end.write(tty: Bool, +prev: List<&2, String>, +fresh: List<&2, String>, +all: List<&2, String>) -> String:
+  match tty:
+    case True{}:
+      Inline.write.tty(prev, fresh, all)
+    case False{}:
+      Lines.join(List.append(&2, String, fresh, all), "\n")
+
+def Inline.end(st: Inline, s: Screen) -> String:
+  match st s:
+    case Inline{tty, +p, +w, rows, prev, printed} Screen{done, live}:
+      Inline.end.write(tty, prev, Views.lines(p, Inline.fresh(printed, done), w), View.lines(p, live, w))
+
+# a new size: after a change of width the old frame may have been
+# reflowed by the terminal, so it is erased and drawn again whole
+def Inline.resize.go(tty: Bool, p: Pen, +prev: List<&2, String>, printed: Nat, +w2: Nat, +rows2: Nat, clear: Bool) -> Inline.Out:
+  match clear:
+    case True{}:
+      Inline.Out{Inline.rise(List.length(&2, String, prev), 0n) ++ T.Tty.erase_down(), Inline{tty, p, w2, rows2, Nil{}, printed}}
+    case False{}:
+      Inline.Out{"", Inline{tty, p, w2, rows2, prev, printed}}
+
+def Inline.resize.at(st: Inline, +w2: Nat, +rows2: Nat, same: Bool) -> Inline.Out:
+  match st:
+    case Inline{+tty, p, w, rows, +prev, printed}:
+      Inline.resize.go(tty, p, prev, printed, w2, rows2, Bool.and(tty, Bool.not(same)))
+
+def Inline.resize(+st: Inline, +w2: Nat, +rows2: Nat) -> Inline.Out:
+  match st:
+    case Inline{tty, p, w, rows, prev, printed}:
+      Inline.resize.at(st, w2, rows2, Nat.is_eq(w, w2))
+
+# The CLI app
+# -----------
+# What Cli.run (run.bend) loops over. Its events: the keys of a read,
+# a tick when nothing came within the tick, a message the work posted,
+# the work's end, and Ctrl-C. An update answers Go to go on, End to
+# stop; the loop answers the last state.
+
+type Ev<-Msg: Data> is Data:
+  Ev.Keys{ks: List<&2, T.Key>}
+  Ev.Tick{}
+  Ev.Msg{m: Msg}
+  Ev.Done{}
+  Ev.Cancel{}
+
+type Step<-M: Data> is Data:
+  Step.Go{m: M}
+  Step.End{m: M}
+
+type Cli<-M: Data, -Msg: Data> is Type:
+  Cli{view: M -> Screen, update: Ev<Msg> -> M -> Step<M>, keys: M -> Bool}
+
 # A sample
 # --------
 
