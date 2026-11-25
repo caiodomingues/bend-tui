@@ -130,6 +130,8 @@ def cell_eq_refl(+c: U.Cell) -> {U.Cell.is_eq(c, c) == True{} : Bool}:
   match c:
     case U.Cell.Of{g, k}:
       and_tt(U.Str.same(g, g), U.Look.is_eq(k, k), str_same_refl(g), look_eq_refl(k))
+    case U.Cell.At{g, k}:
+      and_tt(U.Str.same(g, g), U.Look.is_eq(k, k), str_same_refl(g), look_eq_refl(k))
     case U.Cell.Pad{}:
       {==}
 
@@ -189,7 +191,7 @@ def Laws.lines_first_same(ls, i):
 def write_same(+tty: Bool, +ls: List<&2, String>) -> {U.Inline.write(tty, ls, Nil{}, ls) == "" : String}:
   match tty:
     case True{}:
-      %Equal.sym(Maybe<&2, Nat>, U.Lines.first(ls, ls, 0n), None{}, Laws.lines_first_same(ls, 0n)) : {U.Inline.sync(U.Inline.redraw(List.length(&2, String, ls), _, ls)) == "" : String}
+      %Equal.sym(Maybe<&2, Nat>, U.Lines.first(ls, ls, 0n), None{}, Laws.lines_first_same(ls, 0n)) : {U.Inline.redraw(List.length(&2, String, ls), _, ls) == "" : String}
       {==}
     case False{}:
       {==}
@@ -215,18 +217,34 @@ def drop_len_append(+xs: List<&2, U.View>, +ys: List<&2, U.View>) -> {List.drop(
     case h <> t:
       drop_len_append(t, ys)
 
+def text_same(+tty: Bool, +k: String, +ls: List<&2, String>, +up: Nat, +at: Maybe<&2, U.Pos>, +n: Nat)
+  -> {U.Inline.text.of(tty, U.Str.same(k, k), U.Inline.write(tty, ls, Nil{}, ls), up, at, n) == "" : String}:
+  match tty:
+    case True{}:
+      %Equal.sym(Bool, U.Str.same(k, k), True{}, str_same_refl(k)) : {U.Inline.aimed(_, U.Inline.write(True{}, ls, Nil{}, ls), up, at, n) == "" : String}
+      %Equal.sym(String, U.Inline.write(True{}, ls, Nil{}, ls), "", write_same(True{}, ls)) : {U.Inline.aimed(True{}, _, up, at, n) == "" : String}
+      {==}
+    case False{}:
+      {==}
+
 def Laws.inline_same(st, s):
   match st:
-    case U.Inline{tty, p, w, rows, prev, printed}:
+    case U.Inline{tty, p, w, rows, prev, printed, up, cur}:
       match s:
         case U.Screen{done, live}:
           %Equal.sym(List<&2, U.View>, List.drop(&2, U.View, done, List.length(&2, U.View, done)), Nil{}, drop_len(done))
-            : {U.Inline.write(tty, U.Inline.clip(rows, U.View.lines(p, live, w)), U.Views.lines(p, _, w), U.Inline.clip(rows, U.View.lines(p, live, w))) == "" : String}
-          write_same(tty, U.Inline.clip(rows, U.View.lines(p, live, w)))
+            : {U.Inline.text.of(tty, U.Str.same(U.Pos.key(U.Rows.at(U.Inline.clip(rows, U.View.rows(live, w)), 0n)), U.Pos.key(U.Rows.at(U.Inline.clip(rows, U.View.rows(live, w)), 0n))),
+                U.Inline.write(tty, U.Rows.paint(p, U.Inline.clip(rows, U.View.rows(live, w))), U.Views.lines(p, _, w), U.Rows.paint(p, U.Inline.clip(rows, U.View.rows(live, w)))),
+                U.Pos.up(U.Rows.at(U.Inline.clip(rows, U.View.rows(live, w)), 0n), List.length(&2, String, U.Rows.paint(p, U.Inline.clip(rows, U.View.rows(live, w))))),
+                U.Rows.at(U.Inline.clip(rows, U.View.rows(live, w)), 0n),
+                List.length(&2, String, U.Rows.paint(p, U.Inline.clip(rows, U.View.rows(live, w))))) == "" : String}
+          text_same(tty, U.Pos.key(U.Rows.at(U.Inline.clip(rows, U.View.rows(live, w)), 0n)), U.Rows.paint(p, U.Inline.clip(rows, U.View.rows(live, w))),
+            U.Pos.up(U.Rows.at(U.Inline.clip(rows, U.View.rows(live, w)), 0n), List.length(&2, String, U.Rows.paint(p, U.Inline.clip(rows, U.View.rows(live, w))))),
+            U.Rows.at(U.Inline.clip(rows, U.View.rows(live, w)), 0n), List.length(&2, String, U.Rows.paint(p, U.Inline.clip(rows, U.View.rows(live, w)))))
 
 def Laws.static_once(st, done, more, live):
   match st:
-    case U.Inline{tty, p, w, rows, prev, printed}:
+    case U.Inline{tty, p, w, rows, prev, printed, up, cur}:
       drop_len_append(done, more)
 
 def Laws.pipe_plain(prev, fresh, next):

@@ -303,7 +303,7 @@ def Cli.is_cancel(-Msg: Data, e: U.Ev<Msg>) -> Bool:
 
 def Cli.live_of(st: U.Inline) -> Bool:
   match st:
-    case U.Inline{tty, p, w, rows, prev, printed}:
+    case U.Inline{tty, p, w, rows, prev, printed, up, cur}:
       tty
 
 # the last frame written whole, the cursor shown, raw mode off
@@ -373,3 +373,83 @@ def Cli.run(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, m0: M, work: Chan(U.Ev<Ms
     +ch : Chan(U.Ev<Msg>) <- Chan.new(U.Ev<Msg>, 64)
     IO.spawn(Unit, Cli.work(Msg, ch, work))
     Cli.start(~M, ~Msg, ~app, Cli.live(tty, term, ci), l, wh, ch, m0, tick)
+
+# Prompts
+# -------
+# One call a question, as @clack/prompts asks: a Cli.run with no work,
+# raw mode on while the question is open, its answer as it ends. The
+# answered prompt stays in the scrollback as its title and answer.
+# None when Esc, Ctrl-C or the end of the input cancels it.
+
+def Prompt.none(ch: Chan(U.Ev<Unit>)) -> IO(Unit):
+  IO.pure(Unit, Unit{})
+
+def Prompt.go(-P: Data, +p: P, open: Bool) -> U.Step<P>:
+  match open:
+    case True{}:
+      U.Step.Go{p}
+    case False{}:
+      U.Step.End{p}
+
+def Pick.screen(p: U.Pick) -> U.Screen:
+  U.Screen{Nil{}, U.Pick.view(p)}
+
+def Pick.update(e: U.Ev<Unit>, p: U.Pick) -> U.Step<U.Pick>:
+  match e:
+    case U.Ev.Keys{ks}:
+      +q = U.Pick.keys(ks, p)
+      Prompt.go(U.Pick, q, U.Pick.open(q))
+    case U.Ev.Cancel{}:
+      U.Step.End{U.Pick.cancel(p)}
+    case other:
+      U.Step.Go{p}
+
+def Yes.screen(p: U.Yes) -> U.Screen:
+  U.Screen{Nil{}, U.Yes.view(p)}
+
+def Yes.update(e: U.Ev<Unit>, p: U.Yes) -> U.Step<U.Yes>:
+  match e:
+    case U.Ev.Keys{ks}:
+      +q = U.Yes.keys(ks, p)
+      Prompt.go(U.Yes, q, U.Yes.open(q))
+    case U.Ev.Cancel{}:
+      U.Step.End{U.Yes.cancel(p)}
+    case other:
+      U.Step.Go{p}
+
+def Field.screen(p: U.Field) -> U.Screen:
+  U.Screen{Nil{}, U.Field.view(p)}
+
+def Field.update(e: U.Ev<Unit>, p: U.Field) -> U.Step<U.Field>:
+  match e:
+    case U.Ev.Keys{ks}:
+      +q = U.Field.keys(ks, p)
+      Prompt.go(U.Field, q, U.Field.open(q))
+    case U.Ev.Cancel{}:
+      U.Step.End{U.Field.cancel(p)}
+    case other:
+      U.Step.Go{p}
+
+# one of the items; None when cancelled
+def Prompt.select(title: String, items: List<&2, String>) -> IO(Maybe<&2, Nat>):
+  do IO<Maybe<&2, Nat>>:
+    p : U.Pick <- Cli.run(~U.Pick, ~Unit, ~U.Cli{Pick.screen, Pick.update, U.Pick.open}, U.Pick.new(title, items, False{}), Prompt.none, 80)
+    return U.Pick.answer(p)
+
+# the items marked with Space; None when cancelled
+def Prompt.multi(title: String, items: List<&2, String>) -> IO(Maybe<&2, List<&2, Nat>>):
+  do IO<Maybe<&2, List<&2, Nat>>>:
+    p : U.Pick <- Cli.run(~U.Pick, ~Unit, ~U.Cli{Pick.screen, Pick.update, U.Pick.open}, U.Pick.new(title, items, True{}), Prompt.none, 80)
+    return U.Pick.answers(p)
+
+# yes or no, starting at dflt; y and n answer at once
+def Prompt.confirm(title: String, dflt: Bool) -> IO(Maybe<&2, Bool>):
+  do IO<Maybe<&2, Bool>>:
+    p : U.Yes <- Cli.run(~U.Yes, ~Unit, ~U.Cli{Yes.screen, Yes.update, U.Yes.open}, U.Yes{title, dflt, U.Ask.Open{}}, Prompt.none, 80)
+    return U.Yes.answer(p)
+
+# a line of text, the placeholder when nothing is typed
+def Prompt.text(title: String, placeholder: String) -> IO(Maybe<&2, String>):
+  do IO<Maybe<&2, String>>:
+    p : U.Field <- Cli.run(~U.Field, ~Unit, ~U.Cli{Field.screen, Field.update, U.Field.open}, U.Field.new(title, placeholder), Prompt.none, 80)
+    return U.Field.answer(p)

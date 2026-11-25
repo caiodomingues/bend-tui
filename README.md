@@ -73,6 +73,9 @@ left at the end; piped, the lines and the summary alone.
 and, when it ends, `└ installed in ~/.ogw/versions/0.4.0` in the live
 line's place. `demos/tasks.bend` is a listr2 task list with nested
 tasks, one failing; each top task is printed once as it finishes.
+`demos/prompts.bend` asks what `ogw new` will ask: a template (select),
+features (multi-select), whether to install (confirm) and a name (text,
+placeholder `my-game`); a cancel ends the flow.
 
 ## API
 
@@ -125,6 +128,17 @@ string-width says. Shorthands with Ink's defaults: `txt(s)`, `spans(sp)`,
 | `Bar.view(label, done, total, cols, eta)` | a label, a bar of up to `cols` columns that gives way first when the row is narrow, the percentage, and an ETA string the program works out |
 | `Task{title, state, out, kids}` | listr2's task list: `Task.Wait{}` dim `◼`, `Task.Run{}` a yellow spinner (`❯` for a parent), `Task.Ok{}` green `✓`, `Task.Fail{msg}` red `✗` and `› msg`, `Task.Skip{msg}` yellow `↓`; `Task.view(tick, ts)` shows subtasks two columns in while their parent runs or when one failed, and a running task's `out` under it after `›`; `Task.put(ts, path, edit)` sets a state (`Task.To{st}`) or an output line (`Task.Say{s}`) at a path of sibling indexes |
 | `Badge.view(st, s)`, `Link.view(url, text)` | spans: ` s ` inverse in `st`; an OSC 8 link, `text (url)` where links are off |
+| `View.Edit{chars, cursor, placeholder}` | a view: a text field's row; the character at `cursor` (a blank past the end) is a `Cell.At`, where an inline frame puts the terminal's real cursor; while empty, the placeholder dim with the cursor on its first character |
+| `Pick`, `Yes`, `Field` | the state of a select (single or multi), a confirm and a text input, each with `.key(p, k)`, `.view(p)` and `.answer(p)`, drawn as @clack/prompts draws them: `◆` open, `◇` answered, `■` cancelled; `●`/`○` radios, `◼`/`◻` checkboxes, `● Yes / ○ No`; an answered prompt collapses to its title and its answer, dim |
+
+**Prompts** (`run.bend`), one call a question, each a `Cli.run` with raw
+mode on while it is open: `Prompt.select(title, items)` answers
+`Maybe<Nat>`, `Prompt.multi(title, items)` `Maybe<List<Nat>>` (Space
+marks), `Prompt.confirm(title, dflt)` `Maybe<Bool>` (y and n answer at
+once), `Prompt.text(title, placeholder)` `Maybe<String>` (the placeholder
+when nothing is typed; Left, Right, Home, End, Backspace, Delete). Up/Down
+or k/j move, Enter answers, and Esc, Ctrl-C or the end of the input
+cancels: `None`, the prompt left with `■` and its value struck through.
 
 A widget's rows are cut or padded to the area it gets; nothing overflows.
 `View.height(v, w)` is the rows a view takes at width `w` when nothing
@@ -154,7 +168,10 @@ pure renderer is `Inline{tty, pen, w, rows, prev, printed}`:
 the cursor rests at the start of the row below the frame; done views not
 yet written go above a whole new frame, or else the frame is redrawn from
 its first changed line, inside synchronized output; a frame taller than
-the terminal shows its last `rows - 1` lines. `Inline.end(st, screen)`
+the terminal shows its last `rows - 1` lines. When the frame holds a
+`Cell.At`, the terminal's cursor is shown there, and parked back below
+the frame before anything else is written; when no line changed and the
+cursor stays put, a draw writes nothing. `Inline.end(st, screen)`
 writes the last done views and the whole final frame, unclipped, so the
 scrollback holds all of it. With no terminal, done views are written as
 they come, the live frame once at the end, and nothing moves the cursor.
@@ -235,6 +252,12 @@ proofs, so it prints `SOME PROOFS FAIL` with its TODOs.
   does; piped, with `NO_COLOR=1`, no ESC byte. `demos/tasks.bend`: the
   running parent with `❯`, its subtasks in, the running one's output
   under it; piped, a block per top task as it finishes.
+  `demos/prompts.bend` driven by keys: Down and Enter, Space, Down, Down,
+  Space and Enter, `n`, then `games`, Backspace, Left, `X` and Enter
+  answer platformer; physics, networking; No; gamXe, each left collapsed;
+  the real cursor sits on the placeholder's first character, then after
+  `gamX`; Ctrl-C in the first prompt and Esc in the second end the flow
+  with `■` and `└  cancelled`. The JS lane answers the same.
 - **JS** (`bend demos/todo.bend -o todo.js` and `bun todo.js`): the same
   runs under bun 1.4.2, the same bytes for `steps` but for timing. bun, not
   node: bend-tty's read reaches libc through `bun:ffi`. A signal ends a JS
@@ -247,7 +270,9 @@ proofs, so it prints `SOME PROOFS FAIL` with its TODOs.
   the build.
 
 Not in v1: mouse, a resize signal (the size is read each turn instead), a
-cursor for `Input` (it is drawn inverse, not moved), a sequence split
+real cursor in full-screen apps (`Input` is drawn inverse there; the
+inline `View.Edit` moves it), editing by grapheme cluster in `Field` (it
+edits code points), a sequence split
 across the `max` of a read, flex wrapping onto more lines, `min-content`
 sizes (a child shrinks to zero columns, not to its longest word).
 
@@ -262,6 +287,7 @@ sizes (a child shrinks to zero columns, not to its longest word).
     bend demos/steps.bend -o steps && ./steps     # and ./steps | cat
     bend demos/install.bend -o install && ./install
     bend demos/tasks.bend -o tasks && ./tasks
+    bend demos/prompts.bend -o prompts && ./prompts
 
 Depends on `../bend-tty` (`tty.bend`, `color.bend` and `text.bend`, and
 `tty_io.bend` for the effects) and, for the proofs, `../bend-lemmas`:

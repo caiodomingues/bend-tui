@@ -90,6 +90,7 @@ def Look.is_eq(a: Look, b: Look) -> Bool:
 type Cell is Data:
   Cell.Of{g: String, look: Look}   # a cluster
   Cell.Pad{}                       # the second column of a wide cluster: writes nothing
+  Cell.At{g: String, look: Look}   # a cluster where an inline frame puts the terminal's cursor
 
 def Cell.blank() -> Cell:
   Cell.Of{" ", Look.plain()}
@@ -97,6 +98,8 @@ def Cell.blank() -> Cell:
 def Cell.is_eq(a: Cell, b: Cell) -> Bool:
   match a b:
     case Cell.Of{g1, k1} Cell.Of{g2, k2}:
+      Bool.and(Str.same(g1, g2), Look.is_eq(k1, k2))
+    case Cell.At{g1, k1} Cell.At{g2, k2}:
       Bool.and(Str.same(g1, g2), Look.is_eq(k1, k2))
     case Cell.Pad{} Cell.Pad{}:
       True{}
@@ -150,7 +153,7 @@ def Cell.is_pad(c: Cell) -> Bool:
   match c:
     case Cell.Pad{}:
       True{}
-    case Cell.Of{g, k}:
+    case other:
       False{}
 
 def Cell.wide(cs: List<&2, Cell>) -> Bool:
@@ -218,6 +221,7 @@ type View is Data:
   Border{line: Line, st: C.Style, title: List<&2, Span>, child: View}   # a border, its title on the top edge
   Sized{w: Size, h: Size, child: View}                                  # a width or height of its own
   Meter{done: Nat, total: Nat, on: C.Style, off: C.Style}             # one row: a bar, done / total of it in on, the rest in off
+  View.Edit{chars: List<&2, String>, cursor: Nat, placeholder: String}  # one row: a text field, the terminal's cursor at cursor
 
 # Chalk-like text: a span's style applies to what it holds, an inner
 # style's set parts win and its unset ones inherit
@@ -297,6 +301,8 @@ def Cell.invert(c: Cell) -> Cell:
   match c:
     case Cell.Of{g, k}:
       Cell.Of{g, Look.st(Style.inverse())}
+    case Cell.At{g, k}:
+      Cell.At{g, Look.st(Style.inverse())}
     case Cell.Pad{}:
       Cell.Pad{}
 
@@ -343,12 +349,16 @@ def Cell.str(c: Cell) -> String:
   match c:
     case Cell.Of{g, k}:
       g
+    case Cell.At{g, k}:
+      g
     case Cell.Pad{}:
       ""
 
 def Cell.look_of(c: Cell, +dflt: Look) -> Look:
   match c:
     case Cell.Of{g, k}:
+      k
+    case Cell.At{g, k}:
       k
     case Cell.Pad{}:
       dflt
@@ -505,6 +515,8 @@ def Al.place(+g: String, +w: U32, ot: List<&2, X.Un>, orig: List<&2, Cell>, cur:
       Al{X.Un.Cl{g, w} <> ot, t, cur, rows}
     case Cell.Of{+g0, k} <> t:
       Al.of(Str.same(g, g0), Str.same(g0, " "), g, w, ot, g0, k, t, cur, rows)
+    case Cell.At{+g0, k} <> t:
+      Al.of(Str.same(g, g0), Str.same(g0, " "), g, w, ot, g0, k, t, cur, rows)
 
 def Al.cl(nl: Bool, +g: String, +w: U32, ot: List<&2, X.Un>, orig: List<&2, Cell>, cur: List<&2, Cell>, rows: List<&2, List<&2, Cell>>) -> Al:
   match nl:
@@ -581,6 +593,8 @@ def Cell.repad(c: Cell, +rest: List<&2, Cell>) -> List<&2, Cell>:
   match c:
     case Cell.Of{+g, k}:
       Cell.Of{g, k} <> Bool.pick(List<&2, Cell>, U32.is_eq(X.Ansi.width(g), 2), Cell.Pad{} <> rest, rest)
+    case Cell.At{+g, k}:
+      Cell.At{g, k} <> Bool.pick(List<&2, Cell>, U32.is_eq(X.Ansi.width(g), 2), Cell.Pad{} <> rest, rest)
     case Cell.Pad{}:
       rest
 
@@ -661,6 +675,48 @@ def Txt.wrap.all(ls: List<&2, List<&2, Cell>>, +wrap: Wrap, +w: Nat) -> List<&2,
 # a text's rows at width w
 def Txt.rows(sp: List<&2, Span>, +wrap: Wrap, +w: Nat) -> List<&2, List<&2, Cell>>:
   Txt.wrap.all(Txt.lines(sp), wrap, w)
+
+# A text field's row: the characters, the one at the cursor (a blank
+# past the end) a Cell.At; while empty, the placeholder dim with the
+# cursor on its first character, as clack draws it
+
+def Strs.none(ss: List<&2, String>) -> Bool:
+  match ss:
+    case Nil{}:
+      True{}
+    case s <> t:
+      False{}
+
+def Cells.mark(cs: List<&2, Cell>) -> List<&2, Cell>:
+  match cs:
+    case Nil{}:
+      [Cell.At{" ", Look.plain()}]
+    case Cell.Of{g, k} <> t:
+      Cell.At{g, k} <> t
+    case c <> t:
+      c <> t
+
+def Edit.rest(cs: List<&2, String>) -> List<&2, Cell>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case s <> t:
+      List.append(&2, Cell, Cell.look(Look.plain(), s), Edit.rest(t))
+
+def Edit.go(cs: List<&2, String>, +i: Nat) -> List<&2, Cell>:
+  match cs:
+    case Nil{}:
+      [Cell.At{" ", Look.plain()}]
+    case s <> t:
+      match i:
+        case 0n:
+          List.append(&2, Cell, Cells.mark(Cell.look(Look.plain(), s)), Edit.rest(t))
+        case 1n+p:
+          List.append(&2, Cell, Cell.look(Look.plain(), s), Edit.go(t, p))
+
+def Edit.cells(+cs: List<&2, String>, +cur: Nat, +ph: String) -> List<&2, Cell>:
+  Bool.pick(List<&2, Cell>, Bool.and(Strs.none(cs), Bool.not(Str.same(ph, ""))),
+    Cells.mark(Cell.look(Look.st(C.Style.dim(C.Style.plain())), ph)), Edit.go(cs, cur))
 
 # Measures
 # --------
@@ -748,6 +804,8 @@ def View.width(+v: View) -> Nat:
       Size.nat(sw, View.width(child))
     case Meter{done, total, on, off}:
       0n
+    case View.Edit{chars, cursor, placeholder}:
+      List.length(&2, Cell, Edit.cells(chars, cursor, placeholder))
 
 # The flex arithmetic. A container's children, in order: the sum of
 # their bases, of their grow factors, of shrink times basis (flexbox
@@ -923,6 +981,8 @@ def View.height.go(+v: View, +w: Nat, +cont: Cont) -> Nat:
     case Sized{sw, sh, child}:
       Size.nat(sh, View.height.go(child, Nat.min(Size.of(sw, View.width(child), w), w), Cont.No{}))
     case Meter{done, total, on, off}:
+      1n
+    case View.Edit{chars, cursor, placeholder}:
       1n
 
 def View.height(+v: View, +w: Nat) -> Nat:
@@ -1142,6 +1202,8 @@ def draw.go(+v: View, +w: Nat, +h: Nat, +cont: Cont) -> List<&2, List<&2, Cell>>
     case Meter{done, total, on, off}:
       +n = Nat.div(Nat.mul(w, Nat.min(done, total)), Nat.max(total, 1n))
       [List.append(&2, Cell, cells_of(n, 9608, on), cells_of(Nat.sub(w, n), 9617, off))]
+    case View.Edit{chars, cursor, placeholder}:
+      [Edit.cells(chars, cursor, placeholder)]
 
 def draw(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
   draw.go(v, w, h, Cont.No{})
@@ -1401,6 +1463,8 @@ def Cell.same_look(c: Cell, +k: Look) -> Bool:
   match c:
     case Cell.Of{g, k2}:
       Look.is_eq(k2, k)
+    case Cell.At{g, k2}:
+      Look.is_eq(k2, k)
     case Cell.Pad{}:
       True{}
 
@@ -1546,15 +1610,16 @@ type Screen is Data:
 
 # what an inline renderer remembers: whether it may move the cursor,
 # how it paints, the terminal's width and rows, the live lines on
-# screen and how many done views it wrote
+# screen, how many done views it wrote, and where it left the cursor:
+# up rows above the row below the frame (0 there), at cur ("" for none)
 type Inline is Data:
-  Inline{tty: Bool, pen: Pen, w: Nat, rows: Nat, prev: List<&2, String>, printed: Nat}
+  Inline{tty: Bool, pen: Pen, w: Nat, rows: Nat, prev: List<&2, String>, printed: Nat, up: Nat, cur: String}
 
 type Inline.Out is Data:
   Inline.Out{text: String, next: Inline}
 
 def Inline.new(tty: Bool, p: Pen, w: Nat, rows: Nat) -> Inline:
-  Inline{tty, p, w, rows, Nil{}, 0n}
+  Inline{tty, p, w, rows, Nil{}, 0n, 0n, ""}
 
 def Inline.text(o: Inline.Out) -> String:
   match o:
@@ -1568,8 +1633,13 @@ def Inline.next(o: Inline.Out) -> Inline:
 
 def Inline.printed(st: Inline) -> Nat:
   match st:
-    case Inline{tty, p, w, rows, prev, printed}:
+    case Inline{tty, p, w, rows, prev, printed, up, cur}:
       printed
+
+def Inline.tty(st: Inline) -> Bool:
+  match st:
+    case Inline{tty, p, w, rows, prev, printed, up, cur}:
+      tty
 
 def Str.cr() -> String:
   SCon{Chr{13}, SNil{}}
@@ -1606,10 +1676,6 @@ def Lines.first(prev: List<&2, String>, next: List<&2, String>, +i: Nat) -> Mayb
     case p <> pt n <> nt:
       Lines.first.at(Str.same(p, n), Lines.first(pt, nt, 1n+i), i)
 
-# the last keep lines
-def Lines.last(+ls: List<&2, String>, +keep: Nat) -> List<&2, String>:
-  List.drop(&2, String, ls, Nat.sub(List.length(&2, String, ls), keep))
-
 # s inside synchronized output; nothing when s is empty
 def Inline.sync(s: String) -> String:
   match s:
@@ -1632,10 +1698,10 @@ def Inline.redraw(+n: Nat, at: Maybe<&2, Nat>, +next: List<&2, String>) -> Strin
 def Inline.write.tty(+prev: List<&2, String>, fresh: List<&2, String>, +next: List<&2, String>) -> String:
   match fresh:
     case Nil{}:
-      Inline.sync(Inline.redraw(List.length(&2, String, prev), Lines.first(prev, next, 0n), next))
+      Inline.redraw(List.length(&2, String, prev), Lines.first(prev, next, 0n), next)
     case f <> ft:
-      Inline.sync(Inline.rise(List.length(&2, String, prev), 0n) ++ T.Tty.erase_down()
-        ++ Lines.join(f <> ft, Str.crlf()) ++ Lines.join(next, Str.crlf()))
+      Inline.rise(List.length(&2, String, prev), 0n) ++ T.Tty.erase_down()
+        ++ Lines.join(f <> ft, Str.crlf()) ++ Lines.join(next, Str.crlf())
 
 # what a draw writes, from the live lines on screen (prev), the done
 # lines not yet written (fresh) and the live lines now (next): on a
@@ -1654,47 +1720,152 @@ def Inline.fresh(+printed: Nat, done: List<&2, View>) -> List<&2, View>:
 
 # a frame taller than the terminal shows its last rows - 1 lines: rows
 # that scrolled away cannot be reached to be redrawn
-def Inline.clip(+rows: Nat, ls: List<&2, String>) -> List<&2, String>:
-  Lines.last(ls, Nat.sub(Nat.max(rows, 2n), 1n))
+def Inline.clip(+rows: Nat, +rs: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
+  List.drop(&2, List<&2, Cell>, rs, Nat.sub(List.length(&2, List<&2, Cell>, rs), Nat.sub(Nat.max(rows, 2n), 1n)))
+
+# The cursor: a frame with a Cell.At shows the terminal's cursor there.
+# It is parked back on the row below the frame before anything else is
+# written, and placed again after.
+
+type Pos is Data:
+  Pos{x: Nat, y: Nat}
+
+def Cell.is_at(c: Cell) -> Bool:
+  match c:
+    case Cell.At{g, k}:
+      True{}
+    case other:
+      False{}
+
+def Row.at.if(at: Bool, +x: Nat, rest: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
+  match at:
+    case True{}:
+      Some{x}
+    case False{}:
+      rest
+
+def Row.at(cs: List<&2, Cell>, +x: Nat) -> Maybe<&2, Nat>:
+  match cs:
+    case Nil{}:
+      None{}
+    case c <> t:
+      Row.at.if(Cell.is_at(c), x, Row.at(t, 1n+x))
+
+def Rows.at.if(m: Maybe<&2, Nat>, +y: Nat, rest: Maybe<&2, Pos>) -> Maybe<&2, Pos>:
+  match m:
+    case Some{x}:
+      Some{Pos{x, y}}
+    case None{}:
+      rest
+
+def Rows.at(rs: List<&2, List<&2, Cell>>, +y: Nat) -> Maybe<&2, Pos>:
+  match rs:
+    case Nil{}:
+      None{}
+    case r <> t:
+      Rows.at.if(Row.at(r, 0n), y, Rows.at(t, 1n+y))
+
+def Pos.key(m: Maybe<&2, Pos>) -> String:
+  match m:
+    case None{}:
+      ""
+    case Some{p}:
+      match p:
+        case Pos{x, y}:
+          Nat.show(x) ++ "," ++ Nat.show(y)
+
+def Pos.up(m: Maybe<&2, Pos>, +n: Nat) -> Nat:
+  match m:
+    case None{}:
+      0n
+    case Some{p}:
+      match p:
+        case Pos{x, y}:
+          Nat.sub(n, y)
+
+def Inline.aim(m: Maybe<&2, Pos>, +n: Nat) -> String:
+  match m:
+    case None{}:
+      ""
+    case Some{p}:
+      match p:
+        case Pos{x, y}:
+          T.Tty.up(U32.from_nat(Nat.sub(n, y))) ++ T.Tty.column(U32.from_nat(1n+x)) ++ T.Tty.cursor(True{})
+
+def Inline.park(+up: Nat) -> String:
+  match up:
+    case 0n:
+      ""
+    case 1n+p:
+      T.Tty.cursor(False{}) ++ T.Tty.down(U32.from_nat(up)) ++ Str.cr()
+
+def Inline.aimed.body(body: String, +up: Nat, at: Maybe<&2, Pos>, +n: Nat) -> String:
+  match body:
+    case SNil{}:
+      ""
+    case SCon{h, t}:
+      Inline.sync(Inline.park(up) ++ SCon{h, t} ++ Inline.aim(at, n))
+
+# on a terminal: nothing when no line changed and the cursor stays put
+def Inline.aimed(same: Bool, body: String, +up: Nat, at: Maybe<&2, Pos>, +n: Nat) -> String:
+  match same:
+    case True{}:
+      Inline.aimed.body(body, up, at, n)
+    case False{}:
+      Inline.sync(Inline.park(up) ++ body ++ Inline.aim(at, n))
+
+def Inline.text.of(tty: Bool, same: Bool, body: String, +up: Nat, at: Maybe<&2, Pos>, +n: Nat) -> String:
+  match tty:
+    case True{}:
+      Inline.aimed(same, body, up, at, n)
+    case False{}:
+      body
+
+def View.rows(+v: View, +w: Nat) -> List<&2, List<&2, Cell>>:
+  render(v, w, View.height(v, w))
 
 def Inline.draw(st: Inline, s: Screen) -> Inline.Out:
   match st s:
-    case Inline{+tty, +p, +w, +rows, prev, printed} Screen{+done, live}:
-      +next = Inline.clip(rows, View.lines(p, live, w))
-      Inline.Out{Inline.write(tty, prev, Views.lines(p, Inline.fresh(printed, done), w), next),
-                 Inline{tty, p, w, rows, next, List.length(&2, View, done)}}
+    case Inline{+tty, +p, +w, +rows, prev, printed, +up, cur} Screen{+done, live}:
+      +rs = Inline.clip(rows, View.rows(live, w))
+      +next = Rows.paint(p, rs)
+      +at = Rows.at(rs, 0n)
+      +key = Pos.key(at)
+      +n = List.length(&2, String, next)
+      Inline.Out{Inline.text.of(tty, Str.same(cur, key), Inline.write(tty, prev, Views.lines(p, Inline.fresh(printed, done), w), next), up, at, n),
+                 Inline{tty, p, w, rows, next, List.length(&2, View, done), Pos.up(at, n), key}}
 
 # what ends the output: the last done lines and the whole final frame,
 # unclipped, so the scrollback holds all of it
-def Inline.end.write(tty: Bool, +prev: List<&2, String>, +fresh: List<&2, String>, +all: List<&2, String>) -> String:
+def Inline.end.write(tty: Bool, +up: Nat, +prev: List<&2, String>, +fresh: List<&2, String>, +all: List<&2, String>) -> String:
   match tty:
     case True{}:
-      Inline.write.tty(prev, fresh, all)
+      Inline.sync(Inline.park(up) ++ Inline.write.tty(prev, fresh, all))
     case False{}:
       Lines.join(List.append(&2, String, fresh, all), "\n")
 
 def Inline.end(st: Inline, s: Screen) -> String:
   match st s:
-    case Inline{tty, +p, +w, rows, prev, printed} Screen{done, live}:
-      Inline.end.write(tty, prev, Views.lines(p, Inline.fresh(printed, done), w), View.lines(p, live, w))
+    case Inline{tty, +p, +w, rows, prev, printed, up, cur} Screen{done, live}:
+      Inline.end.write(tty, up, prev, Views.lines(p, Inline.fresh(printed, done), w), View.lines(p, live, w))
 
 # a new size: after a change of width the old frame may have been
 # reflowed by the terminal, so it is erased and drawn again whole
-def Inline.resize.go(tty: Bool, p: Pen, +prev: List<&2, String>, printed: Nat, +w2: Nat, +rows2: Nat, clear: Bool) -> Inline.Out:
+def Inline.resize.go(tty: Bool, p: Pen, +prev: List<&2, String>, printed: Nat, +up: Nat, cur: String, +w2: Nat, +rows2: Nat, clear: Bool) -> Inline.Out:
   match clear:
     case True{}:
-      Inline.Out{Inline.rise(List.length(&2, String, prev), 0n) ++ T.Tty.erase_down(), Inline{tty, p, w2, rows2, Nil{}, printed}}
+      Inline.Out{Inline.park(up) ++ Inline.rise(List.length(&2, String, prev), 0n) ++ T.Tty.erase_down(), Inline{tty, p, w2, rows2, Nil{}, printed, 0n, ""}}
     case False{}:
-      Inline.Out{"", Inline{tty, p, w2, rows2, prev, printed}}
+      Inline.Out{"", Inline{tty, p, w2, rows2, prev, printed, up, cur}}
 
 def Inline.resize.at(st: Inline, +w2: Nat, +rows2: Nat, same: Bool) -> Inline.Out:
   match st:
-    case Inline{+tty, p, w, rows, +prev, printed}:
-      Inline.resize.go(tty, p, prev, printed, w2, rows2, Bool.and(tty, Bool.not(same)))
+    case Inline{+tty, p, w, rows, +prev, printed, +up, cur}:
+      Inline.resize.go(tty, p, prev, printed, up, cur, w2, rows2, Bool.and(tty, Bool.not(same)))
 
 def Inline.resize(+st: Inline, +w2: Nat, +rows2: Nat) -> Inline.Out:
   match st:
-    case Inline{tty, p, w, rows, prev, printed}:
+    case Inline{tty, p, w, rows, prev, printed, up, cur}:
       Inline.resize.at(st, w2, rows2, Nat.is_eq(w, w2))
 
 # The CLI app
@@ -1730,3 +1901,367 @@ def Frame.plain(rows: List<&2, List<&2, Cell>>) -> List<&2, String>:
 
 def main() -> List<&2, String>:
   Frame.plain(render(Boxed{"tui", Above{Menu{["one", "两个", "three"], 1n}, Progress{1n, 3n, Style.plain()}, 3n}}, 12n, 6n))
+
+# Prompts
+# -------
+# The state of a question and the keys that change it, drawn as
+# @clack/prompts draws them: ◆ while open, ◇ once answered, ■ when
+# cancelled; an answered prompt collapses to its title and its answer.
+
+type Ask is Data:
+  Ask.Open{}
+  Ask.Done{}
+  Ask.Cancel{}
+
+def Ask.is_open(a: Ask) -> Bool:
+  match a:
+    case Ask.Open{}:
+      True{}
+    case other:
+      False{}
+
+def Ask.is_done(a: Ask) -> Bool:
+  match a:
+    case Ask.Done{}:
+      True{}
+    case other:
+      False{}
+
+def Ask.head(a: Ask, title: String) -> View:
+  match a:
+    case Ask.Open{}:
+      spans([Span.of(Style.color(C.Color.cyan()), "◆"), Span.S{"  " ++ title}])
+    case Ask.Done{}:
+      spans([Span.of(Style.color(C.Color.green()), "◇"), Span.S{"  " ++ title}])
+    case Ask.Cancel{}:
+      spans([Span.of(Style.color(C.Color.red()), "■"), Span.S{"  " ++ title}])
+
+def Ask.rail(sp: List<&2, Span>) -> View:
+  Row.of([Flex.of(spans([Span.of(Style.color(C.Color.gray()), "│"), Span.S{"  "}])), Flex.grow(View.Txt{sp, Wrap.Cut{X.Cut.End{}}})])
+
+def Ask.end() -> View:
+  spans([Span.of(Style.color(C.Color.gray()), "└")])
+
+# what an answered or cancelled prompt leaves: its title, the answer
+# dim (struck through when cancelled), and the rail on to the next one
+def Ask.summary(a: Ask, +title: String, +answer: String) -> View:
+  match a:
+    case Ask.Cancel{}:
+      Views.col([Ask.head(Ask.Cancel{}, title), Ask.rail([Span.of(C.Style.strike(Style.dim()), answer)]), spans([Span.of(Style.color(C.Color.gray()), "│")])])
+    case other:
+      Views.col([Ask.head(other, title), Ask.rail([Span.of(Style.dim(), answer)]), spans([Span.of(Style.color(C.Color.gray()), "│")])])
+
+def Nat.wrap_dec(+i: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_zero(i), Nat.sub(n, 1n), Nat.sub(i, 1n))
+
+def Nat.wrap_inc(+i: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_lt(1n+i, n), 1n+i, 0n)
+
+def Bools.flip(bs: List<&2, Bool>, +i: Nat) -> List<&2, Bool>:
+  match bs:
+    case Nil{}:
+      Nil{}
+    case b <> t:
+      match i:
+        case 0n:
+          Bool.not(b) <> t
+        case 1n+p:
+          b <> Bools.flip(t, p)
+
+def Bools.at(bs: List<&2, Bool>, +i: Nat) -> Bool:
+  match bs:
+    case Nil{}:
+      False{}
+    case b <> t:
+      match i:
+        case 0n:
+          b
+        case 1n+p:
+          Bools.at(t, p)
+
+# Select, single or multi: the items, the one under the cursor, which
+# are marked (multi), and the answer state
+type Pick is Data:
+  Pick{title: String, items: List<&2, String>, sel: Nat, marks: List<&2, Bool>, multi: Bool, ask: Ask}
+
+def Pick.new(title: String, +items: List<&2, String>, multi: Bool) -> Pick:
+  Pick{title, items, 0n, List.replicate(Bool, List.length(&2, String, items), False{}), multi, Ask.Open{}}
+
+def Pick.key(p: Pick, k: T.Key) -> Pick:
+  match p:
+    case Pick{title, +items, +sel, +marks, +multi, ask}:
+      match k:
+        case T.Up{}:
+          Pick{title, items, Nat.wrap_dec(sel, List.length(&2, String, items)), marks, multi, ask}
+        case T.Char{107}:
+          Pick{title, items, Nat.wrap_dec(sel, List.length(&2, String, items)), marks, multi, ask}
+        case T.Down{}:
+          Pick{title, items, Nat.wrap_inc(sel, List.length(&2, String, items)), marks, multi, ask}
+        case T.Char{106}:
+          Pick{title, items, Nat.wrap_inc(sel, List.length(&2, String, items)), marks, multi, ask}
+        case T.Char{32}:
+          Pick{title, items, sel, Bool.pick(List<&2, Bool>, multi, Bools.flip(marks, sel), marks), multi, ask}
+        case T.Enter{}:
+          Pick{title, items, sel, marks, multi, Ask.Done{}}
+        case T.Esc{}:
+          Pick{title, items, sel, marks, multi, Ask.Cancel{}}
+        case other:
+          Pick{title, items, sel, marks, multi, ask}
+
+def Pick.cancel(p: Pick) -> Pick:
+  match p:
+    case Pick{title, items, sel, marks, multi, ask}:
+      Pick{title, items, sel, marks, multi, Ask.Cancel{}}
+
+def Pick.open(p: Pick) -> Bool:
+  match p:
+    case Pick{title, items, sel, marks, multi, ask}:
+      Ask.is_open(ask)
+
+# the keys of a read, applied until the question is answered
+def Pick.keys(ks: List<&2, T.Key>, +p: Pick) -> Pick:
+  match ks:
+    case Nil{}:
+      p
+    case k <> t:
+      Pick.keys(t, Bool.pick(Pick, Pick.open(p), Pick.key(p, k), p))
+
+def Pick.mark(+multi: Bool, +marked: Bool, +here: Bool) -> Span:
+  match multi:
+    case True{}:
+      Bool.pick(Span, marked, Span.of(Style.color(C.Color.green()), "◼"), Span.of(Style.dim(), "◻"))
+    case False{}:
+      Bool.pick(Span, here, Span.of(Style.color(C.Color.green()), "●"), Span.of(Style.dim(), "○"))
+
+def Pick.rows(items: List<&2, String>, +i: Nat, +sel: Nat, +marks: List<&2, Bool>, +multi: Bool) -> List<&2, View>:
+  match items:
+    case Nil{}:
+      Nil{}
+    case s <> t:
+      +here = Nat.is_eq(i, sel)
+      Ask.rail([Pick.mark(multi, Bools.at(marks, i), here), Span.S{" "}, Span.In{Bool.pick(C.Style, here, C.Style.plain(), Style.dim()), [Span.S{s}]}])
+        <> Pick.rows(t, 1n+i, sel, marks, multi)
+
+def Pick.chosen(items: List<&2, String>, +marks: List<&2, Bool>, +i: Nat) -> List<&2, String>:
+  match items:
+    case Nil{}:
+      Nil{}
+    case +s <> t:
+      +rest = Pick.chosen(t, marks, 1n+i)
+      Bool.pick(List<&2, String>, Bools.at(marks, i), s <> rest, rest)
+
+def Strs.comma(ss: List<&2, String>) -> String:
+  match ss:
+    case Nil{}:
+      ""
+    case s <> t:
+      match t:
+        case Nil{}:
+          s
+        case u <> r:
+          s ++ ", " ++ Strs.comma(u <> r)
+
+def Pick.answer_text(+items: List<&2, String>, +sel: Nat, +marks: List<&2, Bool>, multi: Bool) -> String:
+  match multi:
+    case True{}:
+      Strs.comma(Pick.chosen(items, marks, 0n))
+    case False{}:
+      Str.nth(items, sel)
+
+def Pick.view(p: Pick) -> View:
+  match p:
+    case Pick{+title, +items, +sel, +marks, +multi, ask}:
+      match ask:
+        case Ask.Open{}:
+          Views.col(List.append(&2, View, Ask.head(Ask.Open{}, title) <> Pick.rows(items, 0n, sel, marks, multi), [Ask.end()]))
+        case other:
+          Ask.summary(other, title, Pick.answer_text(items, sel, marks, multi))
+
+# the item chosen, or None when cancelled
+def Pick.answer(p: Pick) -> Maybe<&2, Nat>:
+  match p:
+    case Pick{title, items, sel, marks, multi, ask}:
+      Bool.pick(Maybe<&2, Nat>, Ask.is_done(ask), Some{sel}, None{})
+
+def Nats.marked(bs: List<&2, Bool>, +i: Nat) -> List<&2, Nat>:
+  match bs:
+    case Nil{}:
+      Nil{}
+    case b <> t:
+      +rest = Nats.marked(t, 1n+i)
+      Bool.pick(List<&2, Nat>, b, i <> rest, rest)
+
+# the items marked, or None when cancelled
+def Pick.answers(p: Pick) -> Maybe<&2, List<&2, Nat>>:
+  match p:
+    case Pick{title, items, sel, marks, multi, ask}:
+      Bool.pick(Maybe<&2, List<&2, Nat>>, Ask.is_done(ask), Some{Nats.marked(marks, 0n)}, None{})
+
+# Confirm: yes or no
+type Yes is Data:
+  Yes{title: String, yes: Bool, ask: Ask}
+
+def Yes.key(p: Yes, k: T.Key) -> Yes:
+  match p:
+    case Yes{title, +yes, ask}:
+      match k:
+        case T.Left{}:
+          Yes{title, Bool.not(yes), ask}
+        case T.Right{}:
+          Yes{title, Bool.not(yes), ask}
+        case T.Tab{}:
+          Yes{title, Bool.not(yes), ask}
+        case T.Char{104}:
+          Yes{title, Bool.not(yes), ask}
+        case T.Char{108}:
+          Yes{title, Bool.not(yes), ask}
+        case T.Char{121}:
+          Yes{title, True{}, Ask.Done{}}
+        case T.Char{110}:
+          Yes{title, False{}, Ask.Done{}}
+        case T.Enter{}:
+          Yes{title, yes, Ask.Done{}}
+        case T.Esc{}:
+          Yes{title, yes, Ask.Cancel{}}
+        case other:
+          Yes{title, yes, ask}
+
+def Yes.cancel(p: Yes) -> Yes:
+  match p:
+    case Yes{title, yes, ask}:
+      Yes{title, yes, Ask.Cancel{}}
+
+def Yes.open(p: Yes) -> Bool:
+  match p:
+    case Yes{title, yes, ask}:
+      Ask.is_open(ask)
+
+def Yes.keys(ks: List<&2, T.Key>, +p: Yes) -> Yes:
+  match ks:
+    case Nil{}:
+      p
+    case k <> t:
+      Yes.keys(t, Bool.pick(Yes, Yes.open(p), Yes.key(p, k), p))
+
+def Yes.view(p: Yes) -> View:
+  match p:
+    case Yes{+title, +yes, ask}:
+      match ask:
+        case Ask.Open{}:
+          Views.col([Ask.head(Ask.Open{}, title),
+            Ask.rail([Pick.mark(False{}, False{}, yes), Span.In{Bool.pick(C.Style, yes, C.Style.plain(), Style.dim()), [Span.S{" Yes"}]}, Span.of(Style.dim(), " / "),
+                      Pick.mark(False{}, False{}, Bool.not(yes)), Span.In{Bool.pick(C.Style, yes, Style.dim(), C.Style.plain()), [Span.S{" No"}]}]),
+            Ask.end()])
+        case other:
+          Ask.summary(other, title, Bool.pick(String, yes, "Yes", "No"))
+
+def Yes.answer(p: Yes) -> Maybe<&2, Bool>:
+  match p:
+    case Yes{title, yes, ask}:
+      Bool.pick(Maybe<&2, Bool>, Ask.is_done(ask), Some{yes}, None{})
+
+# Text input: the characters, the cursor between them (0 before the
+# first), and a placeholder shown dim while it is empty. Drawn with
+# View.Edit, which puts the terminal's cursor at the cursor.
+type Field is Data:
+  Field{title: String, chars: List<&2, String>, cursor: Nat, placeholder: String, ask: Ask}
+
+def Field.new(title: String, placeholder: String) -> Field:
+  Field{title, Nil{}, 0n, placeholder, Ask.Open{}}
+
+def Chars.insert(cs: List<&2, String>, +i: Nat, +c: String) -> List<&2, String>:
+  match cs:
+    case Nil{}:
+      [c]
+    case h <> t:
+      match i:
+        case 0n:
+          c <> h <> t
+        case 1n+p:
+          h <> Chars.insert(t, p, c)
+
+def Chars.remove(cs: List<&2, String>, +i: Nat) -> List<&2, String>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case h <> t:
+      match i:
+        case 0n:
+          t
+        case 1n+p:
+          h <> Chars.remove(t, p)
+
+def Chars.of(+c: U32) -> String:
+  SCon{Chr{c}, SNil{}}
+
+def Field.key(p: Field, k: T.Key) -> Field:
+  match p:
+    case Field{+title, +cs, +cur, +placeholder, +ask}:
+      match k:
+        case T.Char{+c}:
+          Bool.pick(Field, U32.is_lt(c, 32), Field{title, cs, cur, placeholder, ask},
+            Field{title, Chars.insert(cs, cur, Chars.of(c)), 1n+cur, placeholder, ask})
+        case T.Backspace{}:
+          Bool.pick(Field, Nat.is_zero(cur), Field{title, cs, cur, placeholder, ask},
+            Field{title, Chars.remove(cs, Nat.sub(cur, 1n)), Nat.sub(cur, 1n), placeholder, ask})
+        case T.Delete{}:
+          Field{title, Chars.remove(cs, cur), cur, placeholder, ask}
+        case T.Left{}:
+          Field{title, cs, Nat.sub(cur, 1n), placeholder, ask}
+        case T.Right{}:
+          Field{title, cs, Nat.min(1n+cur, List.length(&2, String, cs)), placeholder, ask}
+        case T.Home{}:
+          Field{title, cs, 0n, placeholder, ask}
+        case T.End{}:
+          Field{title, cs, List.length(&2, String, cs), placeholder, ask}
+        case T.Enter{}:
+          Field{title, cs, cur, placeholder, Ask.Done{}}
+        case T.Esc{}:
+          Field{title, cs, cur, placeholder, Ask.Cancel{}}
+        case other:
+          Field{title, cs, cur, placeholder, ask}
+
+def Field.cancel(p: Field) -> Field:
+  match p:
+    case Field{title, cs, cur, placeholder, ask}:
+      Field{title, cs, cur, placeholder, Ask.Cancel{}}
+
+def Field.open(p: Field) -> Bool:
+  match p:
+    case Field{title, cs, cur, placeholder, ask}:
+      Ask.is_open(ask)
+
+def Field.keys(ks: List<&2, T.Key>, +p: Field) -> Field:
+  match ks:
+    case Nil{}:
+      p
+    case k <> t:
+      Field.keys(t, Bool.pick(Field, Field.open(p), Field.key(p, k), p))
+
+def Strs.cat(ss: List<&2, String>) -> String:
+  match ss:
+    case Nil{}:
+      ""
+    case s <> t:
+      s ++ Strs.cat(t)
+
+# the text, or the placeholder when it is empty
+def Field.text(+cs: List<&2, String>, +placeholder: String) -> String:
+  Bool.pick(String, Bool.and(Strs.none(cs), Bool.not(Str.same(placeholder, ""))), placeholder, Strs.cat(cs))
+
+def Field.view(p: Field) -> View:
+  match p:
+    case Field{+title, +cs, cur, +placeholder, ask}:
+      match ask:
+        case Ask.Open{}:
+          Views.col([Ask.head(Ask.Open{}, title),
+            Row.of([Flex.of(spans([Span.of(Style.color(C.Color.gray()), "│"), Span.S{"  "}])), Flex.grow(View.Edit{cs, cur, placeholder})]),
+            Ask.end()])
+        case other:
+          Ask.summary(other, title, Field.text(cs, placeholder))
+
+# the text typed, the placeholder when nothing was, None when cancelled
+def Field.answer(p: Field) -> Maybe<&2, String>:
+  match p:
+    case Field{title, +cs, cur, +placeholder, ask}:
+      Bool.pick(Maybe<&2, String>, Ask.is_done(ask), Some{Field.text(cs, placeholder)}, None{})
