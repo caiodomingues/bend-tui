@@ -865,26 +865,26 @@ def Lay.between(j: Justify, +free: Nat, +n: Nat, +gap: Nat) -> Nat:
     case other:
       gap
 
-def Lay.row_sums(kids: List<&2, Flex>, +w: Nat) -> Sums:
+def Lay.row_sums(kids: List<&2, Flex>, +base: Nat) -> Sums:
   match kids:
     case Nil{}:
       Sums{0n, 0n, 0n, 0n}
     case Flex{v, g, s, b} <> t:
-      Sums.add(Size.of(b, View.width(v), w), g, s, Lay.row_sums(t, w))
+      Sums.add(Size.of(b, View.width(v), base), g, s, Lay.row_sums(t, base))
 
-def Lay.row_first(+kids: List<&2, Flex>, +w: Nat, +gap: Nat) -> Nat:
+def Lay.row_first(+kids: List<&2, Flex>, +w: Nat, +base: Nat, +gap: Nat) -> Nat:
   match kids:
     case Nil{}:
       0n
     case Flex{v, g, s, b} <> t:
-      Lay.first(Size.of(b, View.width(v), w), g, s, Lay.row_sums(kids, w), gap, w)
+      Lay.first(Size.of(b, View.width(v), base), g, s, Lay.row_sums(kids, base), gap, w)
 
-def Lay.row_lead(+kids: List<&2, Flex>, +w: Nat, +gap: Nat, j: Justify) -> Nat:
-  +su = Lay.row_sums(kids, w)
+def Lay.row_lead(+kids: List<&2, Flex>, +w: Nat, +base: Nat, +gap: Nat, j: Justify) -> Nat:
+  +su = Lay.row_sums(kids, base)
   Lay.lead(j, Lay.free(su, gap, w), Lay.count(su))
 
-def Lay.row_between(+kids: List<&2, Flex>, +w: Nat, +gap: Nat, j: Justify) -> Nat:
-  +su = Lay.row_sums(kids, w)
+def Lay.row_between(+kids: List<&2, Flex>, +w: Nat, +base: Nat, +gap: Nat, j: Justify) -> Nat:
+  +su = Lay.row_sums(kids, base)
   Lay.between(j, Lay.free(su, gap, w), Lay.count(su), gap)
 
 # a child's width across a Col: all of it when stretched, else its own
@@ -907,21 +907,29 @@ def Lay.is_stretch(a: Align) -> Bool:
 # rebuilt node to keep its own fields, so this rides beside it
 type Cont is Data:
   Cont.No{}
-  Cont.Gap{g: Nat}
+  Cont.Gap{g: Nat, base: Nat}
 
 def Cont.gap(c: Cont, +gap: Nat) -> Nat:
   match c:
     case Cont.No{}:
       gap
-    case Cont.Gap{g}:
+    case Cont.Gap{g, b}:
       g
 
 def Cont.just(c: Cont, j: Justify) -> Justify:
   match c:
     case Cont.No{}:
       j
-    case Cont.Gap{g}:
+    case Cont.Gap{g, b}:
       Justify.Start{}
+
+# what a percent size is of: the whole container, not what is left of it
+def Cont.base(c: Cont, +whole: Nat) -> Nat:
+  match c:
+    case Cont.No{}:
+      whole
+    case Cont.Gap{g, b}:
+      b
 
 def View.height.go(+v: View, +w: Nat, +cont: Cont) -> Nat:
   match v:
@@ -962,11 +970,12 @@ def View.height.go(+v: View, +w: Nat, +cont: Cont) -> Nat:
           +ks = {Flex{fv, g, s, b} <> rest : List<&2, Flex>}
           +eg = Cont.gap(cont, gap)
           +ej = Cont.just(cont, justify)
-          +lead = Lay.row_lead(ks, w, eg, ej)
-          +kw = Lay.row_first(ks, w, eg)
-          +btw = Lay.row_between(ks, w, eg, ej)
+          +base = Cont.base(cont, w)
+          +lead = Lay.row_lead(ks, w, base, eg, ej)
+          +kw = Lay.row_first(ks, w, base, eg)
+          +btw = Lay.row_between(ks, w, base, eg, ej)
           Nat.max(View.height.go(fv, kw, Cont.No{}),
-            View.height.go(Row{rest, gap, justify, align}, Nat.sub(w, Nat.add(lead, Nat.add(kw, Lay.gapif(rest, btw)))), Cont.Gap{btw}))
+            View.height.go(Row{rest, gap, justify, align}, Nat.sub(w, Nat.add(lead, Nat.add(kw, Lay.gapif(rest, btw)))), Cont.Gap{btw, base}))
     case Col{kids, gap, justify, align}:
       match kids:
         case Nil{}:
@@ -988,26 +997,26 @@ def View.height.go(+v: View, +w: Nat, +cont: Cont) -> Nat:
 def View.height(+v: View, +w: Nat) -> Nat:
   View.height.go(v, w, Cont.No{})
 
-def Lay.col_sums(kids: List<&2, Flex>, +w: Nat, +h: Nat, +a: Align) -> Sums:
+def Lay.col_sums(kids: List<&2, Flex>, +w: Nat, +base: Nat, +a: Align) -> Sums:
   match kids:
     case Nil{}:
       Sums{0n, 0n, 0n, 0n}
     case Flex{+v, g, s, b} <> t:
-      Sums.add(Size.of(b, View.height(v, Lay.cross_w(a, v, w)), h), g, s, Lay.col_sums(t, w, h, a))
+      Sums.add(Size.of(b, View.height(v, Lay.cross_w(a, v, w)), base), g, s, Lay.col_sums(t, w, base, a))
 
-def Lay.col_first(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +gap: Nat, +a: Align) -> Nat:
+def Lay.col_first(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +base: Nat, +gap: Nat, +a: Align) -> Nat:
   match kids:
     case Nil{}:
       0n
     case Flex{v, g, s, b} <> t:
-      Lay.first(Size.of(b, View.height(v, Lay.cross_w(a, v, w)), h), g, s, Lay.col_sums(kids, w, h, a), gap, h)
+      Lay.first(Size.of(b, View.height(v, Lay.cross_w(a, v, w)), base), g, s, Lay.col_sums(kids, w, base, a), gap, h)
 
-def Lay.col_lead(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +gap: Nat, j: Justify, +a: Align) -> Nat:
-  +su = Lay.col_sums(kids, w, h, a)
+def Lay.col_lead(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +base: Nat, +gap: Nat, j: Justify, +a: Align) -> Nat:
+  +su = Lay.col_sums(kids, w, base, a)
   Lay.lead(j, Lay.free(su, gap, h), Lay.count(su))
 
-def Lay.col_between(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +gap: Nat, j: Justify, +a: Align) -> Nat:
-  +su = Lay.col_sums(kids, w, h, a)
+def Lay.col_between(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +base: Nat, +gap: Nat, j: Justify, +a: Align) -> Nat:
+  +su = Lay.col_sums(kids, w, base, a)
   Lay.between(j, Lay.free(su, gap, h), Lay.count(su), gap)
 
 def blank_rows(n: Nat, +w: Nat) -> List<&2, List<&2, Cell>>:
@@ -1158,15 +1167,16 @@ def draw.go(+v: View, +w: Nat, +h: Nat, +cont: Cont) -> List<&2, List<&2, Cell>>
           +ks = {Flex{fv, g, s, b} <> rest : List<&2, Flex>}
           +eg = Cont.gap(cont, gap)
           +ej = Cont.just(cont, justify)
-          +lead = Lay.row_lead(ks, w, eg, ej)
-          +kw = Lay.row_first(ks, w, eg)
-          +btw = Lay.row_between(ks, w, eg, ej)
+          +base = Cont.base(cont, w)
+          +lead = Lay.row_lead(ks, w, base, eg, ej)
+          +kw = Lay.row_first(ks, w, base, eg)
+          +btw = Lay.row_between(ks, w, base, eg, ej)
           +gi = Lay.gapif(rest, btw)
           +kh = Bool.pick(Nat, Lay.is_stretch(align), h, Nat.min(View.height(fv, kw), h))
           +rw = Nat.sub(w, Nat.add(lead, Nat.add(kw, gi)))
           hcat(blank_rows(h, lead),
             hcat(fit_rows(h, kw, List.append(&2, List<&2, Cell>, blank_rows(Lay.offset(align, kh, h), kw), fit_rows(kh, kw, draw.go(fv, kw, kh, Cont.No{})))),
-              hcat(blank_rows(h, gi), fit_rows(h, rw, draw.go(Row{rest, gap, justify, align}, rw, h, Cont.Gap{btw})))))
+              hcat(blank_rows(h, gi), fit_rows(h, rw, draw.go(Row{rest, gap, justify, align}, rw, h, Cont.Gap{btw, base})))))
     case Col{kids, gap, justify, align}:
       match kids:
         case Nil{}:
@@ -1176,14 +1186,15 @@ def draw.go(+v: View, +w: Nat, +h: Nat, +cont: Cont) -> List<&2, List<&2, Cell>>
           +eg = Cont.gap(cont, gap)
           +ej = Cont.just(cont, justify)
           +cw = Lay.cross_w(align, fv, w)
-          +lead = Lay.col_lead(ks, w, h, eg, ej, align)
-          +kh = Lay.col_first(ks, w, h, eg, align)
-          +btw = Lay.col_between(ks, w, h, eg, ej, align)
+          +base = Cont.base(cont, h)
+          +lead = Lay.col_lead(ks, w, h, base, eg, ej, align)
+          +kh = Lay.col_first(ks, w, h, base, eg, align)
+          +btw = Lay.col_between(ks, w, h, base, eg, ej, align)
           +gi = Lay.gapif(rest, btw)
           List.append(&2, List<&2, Cell>, blank_rows(lead, w),
             List.append(&2, List<&2, Cell>, Lay.indent(fit_rows(kh, cw, draw.go(fv, cw, kh, Cont.No{})), Lay.offset(align, cw, w)),
               List.append(&2, List<&2, Cell>, blank_rows(gi, w),
-                draw.go(Col{rest, gap, justify, align}, w, Nat.sub(h, Nat.add(lead, Nat.add(kh, gi))), Cont.Gap{btw}))))
+                draw.go(Col{rest, gap, justify, align}, w, Nat.sub(h, Nat.add(lead, Nat.add(kh, gi))), Cont.Gap{btw, base}))))
     case Pad{t, r, b, l, child}:
       +cw = Nat.sub(w, Nat.add(l, r))
       +ch = Nat.sub(h, Nat.add(t, b))
@@ -1608,6 +1619,16 @@ def Views.lines(+p: Pen, vs: List<&2, View>, +w: Nat) -> List<&2, String>:
 type Screen is Data:
   Screen{done: List<&2, View>, live: View}
 
+def Screen.done(s: Screen) -> List<&2, View>:
+  match s:
+    case Screen{d, l}:
+      d
+
+def Screen.live(s: Screen) -> View:
+  match s:
+    case Screen{d, l}:
+      l
+
 # what an inline renderer remembers: whether it may move the cursor,
 # how it paints, the terminal's width and rows, the live lines on
 # screen, how many done views it wrote, and where it left the cursor:
@@ -1939,6 +1960,11 @@ def Ask.head(a: Ask, title: String) -> View:
 def Ask.rail(sp: List<&2, Span>) -> View:
   Row.of([Flex.of(spans([Span.of(Style.color(C.Color.gray()), "│"), Span.S{"  "}])), Flex.grow(View.Txt{sp, Wrap.Cut{X.Cut.End{}}})])
 
+# the rail with a pointer: the row under the cursor where only a glyph,
+# not a style, may tell it apart (NO_COLOR draws no style)
+def Ask.rail.at(sp: List<&2, Span>) -> View:
+  Row.of([Flex.of(spans([Span.of(Style.color(C.Color.gray()), "│"), Span.S{" "}, Span.of(Style.color(C.Color.cyan()), "›")])), Flex.grow(View.Txt{sp, Wrap.Cut{X.Cut.End{}}})])
+
 def Ask.end() -> View:
   spans([Span.of(Style.color(C.Color.gray()), "└")])
 
@@ -2039,7 +2065,8 @@ def Pick.rows(items: List<&2, String>, +i: Nat, +sel: Nat, +marks: List<&2, Bool
       Nil{}
     case s <> t:
       +here = Nat.is_eq(i, sel)
-      Ask.rail([Pick.mark(multi, Bools.at(marks, i), here), Span.S{" "}, Span.In{Bool.pick(C.Style, here, C.Style.plain(), Style.dim()), [Span.S{s}]}])
+      +sp = {[Pick.mark(multi, Bools.at(marks, i), here), Span.S{" "}, Span.In{Bool.pick(C.Style, here, C.Style.plain(), Style.dim()), [Span.S{s}]}] : List<&2, Span>}
+      Bool.pick(View, Bool.and(multi, here), Ask.rail.at(sp), Ask.rail(sp))
         <> Pick.rows(t, 1n+i, sel, marks, multi)
 
 def Pick.chosen(items: List<&2, String>, +marks: List<&2, Bool>, +i: Nat) -> List<&2, String>:

@@ -84,3 +84,35 @@ law pipe_plain:
   for +fresh : List<&2, String>
   for +next  : List<&2, String>
   {U.Inline.write(False{}, prev, fresh, next) == U.Lines.join(fresh, "\n") : String}
+
+# LAW: with no terminal, a draw writes the done lines not yet written,
+# joined by line breaks, and nothing else: no cursor movement, no live
+# frame, whatever the screen
+law pipe_draw:
+  for +p : U.Pen
+  for +w : Nat
+  for +rows : Nat
+  for +prev : List<&2, String>
+  for +printed : Nat
+  for +up : Nat
+  for +cur : String
+  for +s : U.Screen
+  {U.Inline.text(U.Inline.draw(U.Inline{False{}, p, w, rows, prev, printed, up, cur}, s)) == U.Lines.join(U.Views.lines(p, U.Inline.fresh(printed, U.Screen.done(s)), w), "\n") : String}
+
+# LAW: with no terminal, the end writes the done lines left and the
+# whole final frame, joined by line breaks, and nothing else
+law pipe_end:
+  for +p : U.Pen
+  for +w : Nat
+  for +rows : Nat
+  for +prev : List<&2, String>
+  for +printed : Nat
+  for +up : Nat
+  for +cur : String
+  for +s : U.Screen
+  {U.Inline.end(U.Inline{False{}, p, w, rows, prev, printed, up, cur}, s) == U.Lines.join(List.append(&2, String, U.Views.lines(p, U.Inline.fresh(printed, U.Screen.done(s)), w), U.View.lines(p, U.Screen.live(s), w)), "\n") : String}
+
+# LAW: a percent basis is a share of the whole row, for every child: two
+# halves of 20 columns are 10 and 10
+law pct_halves:
+  {U.Frame.plain(U.render(U.Row{[U.Flex{U.Fill{U.Cell.Of{"a", U.Look.plain()}}, 0n, 1n, U.Size.Pct{50n}}, U.Flex{U.Fill{U.Cell.Of{"b", U.Look.plain()}}, 0n, 1n, U.Size.Pct{50n}}], 0n, U.Justify.Start{}, U.Align.Stretch{}}, 20n, 1n)) == ["aaaaaaaaaabbbbbbbbbb"] : List<&2, String>}

@@ -249,3 +249,16 @@ def Laws.static_once(st, done, more, live):
 
 def Laws.pipe_plain(prev, fresh, next):
   {==}
+
+def Laws.pipe_draw(p, w, rows, prev, printed, up, cur, s):
+  match s:
+    case U.Screen{done, live}:
+      {==}
+
+def Laws.pipe_end(p, w, rows, prev, printed, up, cur, s):
+  match s:
+    case U.Screen{done, live}:
+      {==}
+
+def Laws.pct_halves():
+  {==}
