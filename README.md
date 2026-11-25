@@ -91,6 +91,20 @@ code) and `Style.inverse()` build `C.Style`s.
 | `Menu{items, sel}` | a row per item, item `sel` inverse, scrolled so that it is on screen |
 | `Input{text, cursor}` | one row; the cluster at `cursor` inverse |
 | `Progress{done, total, st}` | one row, filled `done / total` of the width |
+| `View.Txt{spans, wrap}` | styled text: `Wrap.Word{}` and `Wrap.Hard{}` wrap it to the width (bend-tty's `Ansi.wrap`), `Wrap.Cut{at}` keeps one row with an ellipsis (`Ansi.truncate`, `X.Cut.End{}`, `Start{}`, `Middle{}`); a `\n` breaks a line |
+| `Row{kids, gap, justify, align}` / `Col{kids, gap, justify, align}` | flexbox on one axis: each `Flex{v, grow, shrink, basis}` gets its basis (`Size.Auto{}` its content, `Size.Cols{n}`, `Size.Pct{p}` of the parent), then a share of the free space by `grow` or of the overflow by `shrink` times basis; `gap` between; `Justify` Start, End, Center, Between, Around, Evenly; `Align` Start, End, Center, Stretch on the cross axis |
+| `Pad{t, r, b, l, child}` | blank rows and columns around the child (`View.pad(n, v)`; `View.margin` is the same outside a border) |
+| `Border{line, st, title, child}` | a border in `Line.Single{}`, `Round{}`, `Double{}` or `Bold{}` (cli-boxes' glyphs) and a style, the title spans on the top edge |
+| `Sized{w, h, child}` | the child at a size of its own: `Size.Cols{n}`, `Size.Pct{p}`, or `Size.Auto{}` |
+
+Spans are chalk-like: `Span.S{s}` is text, `Span.In{st, kids}` styles what
+it holds, an inner style's set parts winning and its unset ones inherited,
+and `Span.Link{url, kids}` makes it a link. Wrapping and truncation run on
+the plain text and the looks are laid back on cluster by cluster, so a
+wrapped or cut line keeps its colours and CJK and emoji measure as
+string-width says. Shorthands with Ink's defaults: `txt(s)`, `spans(sp)`,
+`Span.of(st, s)`, `Flex.of(v)` (grow 0, shrink 1, auto),
+`Flex.grow(v)`, `Row.of(kids)`, `Col.of(kids)` (no gap, start, stretch).
 
 A widget's rows are cut or padded to the area it gets; nothing overflows.
 `View.height(v, w)` is the rows a view takes at width `w` when nothing
@@ -208,7 +222,8 @@ proofs, so it prints `SOME PROOFS FAIL` with its TODOs.
 
 Not in v1: mouse, a resize signal (the size is read each turn instead), a
 cursor for `Input` (it is drawn inverse, not moved), a sequence split
-across the `max` of a read, wrapped text and flex layout (next).
+across the `max` of a read, flex wrapping onto more lines, `min-content`
+sizes (a child shrinks to zero columns, not to its longest word).
 
 ## Run
 

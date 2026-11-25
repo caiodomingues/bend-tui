@@ -211,6 +211,56 @@ type View is Data:
   Menu{items: List<&2, String>, sel: Nat}     # a list; item sel highlighted, scrolled into view
   Input{text: String, cursor: Nat}              # one row of text with the cursor cell inverse
   Progress{done: Nat, total: Nat, st: C.Style}  # one row, filled to done / total
+  View.Txt{spans: List<&2, Span>, wrap: Wrap}   # styled text, wrapped or cut to the width
+  Row{kids: List<&2, Flex>, gap: Nat, justify: Justify, align: Align}   # flex, left to right
+  Col{kids: List<&2, Flex>, gap: Nat, justify: Justify, align: Align}   # flex, top to bottom
+  Pad{t: Nat, r: Nat, b: Nat, l: Nat, child: View}                      # blank rows and columns around
+  Border{line: Line, st: C.Style, title: List<&2, Span>, child: View}   # a border, its title on the top edge
+  Sized{w: Size, h: Size, child: View}                                  # a width or height of its own
+
+# Chalk-like text: a span's style applies to what it holds, an inner
+# style's set parts win and its unset ones inherit
+type Span is Data:
+  Span.S{s: String}
+  Span.In{st: C.Style, kids: List<&2, Span>}
+  Span.Link{url: String, kids: List<&2, Span>}
+
+type Wrap is Data:
+  Wrap.Word{}              # wrap-ansi, words to the next row, a longer one alone
+  Wrap.Hard{}              # wrap-ansi with hard: a longer word is cut
+  Wrap.Cut{at: X.Cut}      # cli-truncate: one row, an ellipsis at End, Start or Middle
+
+type Size is Data:
+  Size.Auto{}              # the content's size
+  Size.Cols{n: Nat}        # fixed: columns, or rows on the vertical axis
+  Size.Pct{p: Nat}         # percent of the parent
+
+# where free space goes on the main axis, as CSS justify-content
+type Justify is Data:
+  Justify.Start{}
+  Justify.End{}
+  Justify.Center{}
+  Justify.Between{}
+  Justify.Around{}
+  Justify.Evenly{}
+
+# where a child sits on the cross axis, as CSS align-items
+type Align is Data:
+  Align.Start{}
+  Align.End{}
+  Align.Center{}
+  Align.Stretch{}
+
+# border glyphs, as cli-boxes
+type Line is Data:
+  Line.Single{}
+  Line.Round{}
+  Line.Double{}
+  Line.Bold{}
+
+# a child of a Row or Col: Ink's defaults are Flex{v, 0n, 1n, Size.Auto{}}
+type Flex is Data:
+  Flex{v: View, grow: Nat, shrink: Nat, basis: Size}
 
 # rows placed side by side: each left row followed by its right row
 def hcat(ls: List<&2, List<&2, Cell>>, rs: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
@@ -288,6 +338,684 @@ def box_side(rows: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
 def box_corner(+w: Nat, row: List<&2, Cell>, +corner: U32) -> List<&2, Cell>:
   List.append(&2, Cell, fit(Nat.sub(w, 1n), row), cells_of(1n, corner, Style.plain()))
 
+def Cell.str(c: Cell) -> String:
+  match c:
+    case Cell.Of{g, k}:
+      g
+    case Cell.Pad{}:
+      ""
+
+def Cell.look_of(c: Cell, +dflt: Look) -> Look:
+  match c:
+    case Cell.Of{g, k}:
+      k
+    case Cell.Pad{}:
+      dflt
+
+# Text
+# ----
+# Spans become cells, a look each, one list per hard line. Wrapping and
+# truncation are bend-tty's, on the line's plain text; the looks are
+# then laid back on by walking the result beside the cells it came
+# from: the result is the text less the spaces wrap drops at a break,
+# plus line breaks and the ellipsis, so one pass places every cluster.
+
+def Color.over(outer: C.Color, inner: C.Color) -> C.Color:
+  match inner:
+    case C.Color.Default{}:
+      outer
+    case other:
+      other
+
+def Style.over(a: C.Style, b: C.Style) -> C.Style:
+  match a b:
+    case C.Style{f1, b1, x1, y1, z1, u1, v1, h1, s1} C.Style{f2, b2, x2, y2, z2, u2, v2, h2, s2}:
+      C.Style{Color.over(f1, f2), Color.over(b1, b2), Bool.or(x1, x2), Bool.or(y1, y2), Bool.or(z1, z2),
+        Bool.or(u1, u2), Bool.or(v1, v2), Bool.or(h1, h2), Bool.or(s1, s2)}
+
+def Look.over(k: Look, st: C.Style) -> Look:
+  match k:
+    case Look.Of{s, l}:
+      Look.Of{Style.over(s, st), l}
+
+def Look.linked(k: Look, url: String) -> Look:
+  match k:
+    case Look.Of{s, l}:
+      Look.Of{s, url}
+
+def Str.split.cur(nl: Bool, +c: U32, cur: String) -> String:
+  match nl:
+    case True{}:
+      SNil{}
+    case False{}:
+      SCon{Chr{c}, cur}
+
+def Str.split.out(nl: Bool, +cur: String, out: List<&2, String>) -> List<&2, String>:
+  match nl:
+    case True{}:
+      String.reverse(cur) <> out
+    case False{}:
+      out
+
+# the pieces between line breaks, last first; cur is the piece in
+# progress, reversed
+def Str.split.go(s: String, +cur: String, out: List<&2, String>) -> List<&2, String>:
+  match s:
+    case SNil{}:
+      String.reverse(cur) <> out
+    case SCon{Chr{+c}, t}:
+      +nl = U32.is_eq(c, 10)
+      Str.split.go(t, Str.split.cur(nl, c, cur), Str.split.out(nl, cur, out))
+
+def Str.lines(s: String) -> List<&2, String>:
+  List.reverse(&2, String, Str.split.go(s, "", Nil{}))
+
+type Tok is Data:
+  Tok.C{c: Cell}
+  Tok.Nl{}
+
+def Tok.cells(cs: List<&2, Cell>) -> List<&2, Tok>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case c <> t:
+      Tok.C{c} <> Tok.cells(t)
+
+def Tok.nl(first: Bool) -> List<&2, Tok>:
+  match first:
+    case True{}:
+      Nil{}
+    case False{}:
+      [Tok.Nl{}]
+
+def Tok.segs(segs: List<&2, String>, +lk: Look, first: Bool) -> List<&2, Tok>:
+  match segs:
+    case Nil{}:
+      Nil{}
+    case s <> t:
+      List.append(&2, Tok, Tok.nl(first), List.append(&2, Tok, Tok.cells(Cell.look(lk, s)), Tok.segs(t, lk, False{})))
+
+def Span.toks(sp: List<&2, Span>, +lk: Look) -> List<&2, Tok>:
+  match sp:
+    case Nil{}:
+      Nil{}
+    case Span.S{s} <> t:
+      List.append(&2, Tok, Tok.segs(Str.lines(s), lk, True{}), Span.toks(t, lk))
+    case Span.In{st, kids} <> t:
+      List.append(&2, Tok, Span.toks(kids, Look.over(lk, st)), Span.toks(t, lk))
+    case Span.Link{url, kids} <> t:
+      List.append(&2, Tok, Span.toks(kids, Look.linked(lk, url)), Span.toks(t, lk))
+
+# the hard lines, last first; cur is the line in progress, reversed
+def Tok.lines(ts: List<&2, Tok>, cur: List<&2, Cell>, out: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
+  match ts:
+    case Nil{}:
+      List.reverse(&2, Cell, cur) <> out
+    case Tok.C{c} <> t:
+      Tok.lines(t, c <> cur, out)
+    case Tok.Nl{} <> t:
+      Tok.lines(t, Nil{}, List.reverse(&2, Cell, cur) <> out)
+
+def Txt.lines(sp: List<&2, Span>) -> List<&2, List<&2, Cell>>:
+  List.reverse(&2, List<&2, Cell>, Tok.lines(Span.toks(sp, Look.plain()), Nil{}, Nil{}))
+
+def Cells.plain(cs: List<&2, Cell>) -> String:
+  match cs:
+    case Nil{}:
+      ""
+    case c <> t:
+      Cell.str(c) ++ Cells.plain(t)
+
+def Cells.widest(ls: List<&2, List<&2, Cell>>) -> Nat:
+  match ls:
+    case Nil{}:
+      0n
+    case l <> t:
+      Nat.max(List.length(&2, Cell, l), Cells.widest(t))
+
+# The alignment: the result's units left to place, the cells they came
+# from, the row in progress (reversed), the rows done (reversed)
+type Al is Data:
+  Al{out: List<&2, X.Un>, orig: List<&2, Cell>, cur: List<&2, Cell>, rows: List<&2, List<&2, Cell>>}
+
+def Al.emit(+g: String, +w: U32, +lk: Look, +cur: List<&2, Cell>) -> List<&2, Cell>:
+  Bool.pick(List<&2, Cell>, U32.is_eq(w, 0), cur,
+    Bool.pick(List<&2, Cell>, U32.is_eq(w, 2), Cell.Pad{} <> Cell.Of{g, lk} <> cur, Cell.Of{g, lk} <> cur))
+
+# a cluster of the result against the next cell: the same cluster is
+# placed with the cell's look; a space the result lacks was dropped at
+# a break; anything else (the ellipsis) was put in, with the look of
+# the cell it stands before
+def Al.of(same: Bool, space: Bool, +g: String, +w: U32, ot: List<&2, X.Un>, +g0: String, +k: Look, t: List<&2, Cell>,
+          cur: List<&2, Cell>, rows: List<&2, List<&2, Cell>>) -> Al:
+  match same space:
+    case True{} sp:
+      Al{ot, t, Al.emit(g, w, k, cur), rows}
+    case False{} True{}:
+      Al{X.Un.Cl{g, w} <> ot, t, cur, rows}
+    case False{} False{}:
+      Al{ot, Cell.Of{g0, k} <> t, Al.emit(g, w, k, cur), rows}
+
+def Al.place(+g: String, +w: U32, ot: List<&2, X.Un>, orig: List<&2, Cell>, cur: List<&2, Cell>, rows: List<&2, List<&2, Cell>>) -> Al:
+  match orig:
+    case Nil{}:
+      Al{ot, Nil{}, Al.emit(g, w, Look.plain(), cur), rows}
+    case Cell.Pad{} <> t:
+      Al{X.Un.Cl{g, w} <> ot, t, cur, rows}
+    case Cell.Of{+g0, k} <> t:
+      Al.of(Str.same(g, g0), Str.same(g0, " "), g, w, ot, g0, k, t, cur, rows)
+
+def Al.cl(nl: Bool, +g: String, +w: U32, ot: List<&2, X.Un>, orig: List<&2, Cell>, cur: List<&2, Cell>, rows: List<&2, List<&2, Cell>>) -> Al:
+  match nl:
+    case True{}:
+      Al{ot, orig, Nil{}, List.reverse(&2, Cell, cur) <> rows}
+    case False{}:
+      Al.place(g, w, ot, orig, cur, rows)
+
+def Al.step(st: Al) -> Al:
+  match st:
+    case Al{out, orig, cur, rows}:
+      match out:
+        case Nil{}:
+          Al{Nil{}, orig, cur, rows}
+        case X.Un.Esc{s} <> ot:
+          Al{ot, orig, cur, rows}
+        case X.Un.Cl{+g, w} <> ot:
+          Al.cl(Str.same(g, "\n"), g, w, ot, orig, cur, rows)
+
+# each step places a unit or drops a cell, so the two lengths bound it
+def Al.run(fuel: Nat, st: Al) -> Al:
+  match fuel:
+    case 0n:
+      st
+    case 1n+f:
+      Al.run(f, Al.step(st))
+
+def Al.rows(st: Al) -> List<&2, List<&2, Cell>>:
+  match st:
+    case Al{out, orig, cur, rows}:
+      List.reverse(&2, List<&2, Cell>, List.reverse(&2, Cell, cur) <> rows)
+
+def Al.align(+out: List<&2, X.Un>, +orig: List<&2, Cell>) -> List<&2, List<&2, Cell>>:
+  Al.rows(Al.run(1n+Nat.add(List.length(&2, X.Un, out), List.length(&2, Cell, orig)), Al{out, orig, Nil{}, Nil{}}))
+
+def Un.is_ell(u: X.Un) -> Bool:
+  match u:
+    case X.Un.Cl{g, w}:
+      Str.same(g, "…")
+    case X.Un.Esc{s}:
+      False{}
+
+def Un.pre(us: List<&2, X.Un>) -> List<&2, X.Un>:
+  match us:
+    case Nil{}:
+      Nil{}
+    case +u <> t:
+      Bool.pick(List<&2, X.Un>, Un.is_ell(u), Nil{}, u <> Un.pre(t))
+
+def Un.post(us: List<&2, X.Un>) -> List<&2, X.Un>:
+  match us:
+    case Nil{}:
+      Nil{}
+    case +u <> +t:
+      Bool.pick(List<&2, X.Un>, Un.is_ell(u), t, Un.post(t))
+
+def Un.has_ell(us: List<&2, X.Un>) -> Bool:
+  match us:
+    case Nil{}:
+      False{}
+    case u <> t:
+      Bool.or(Un.is_ell(u), Un.has_ell(t))
+
+def Cells.unpad(cs: List<&2, Cell>) -> List<&2, Cell>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case Cell.Pad{} <> t:
+      Cells.unpad(t)
+    case c <> t:
+      c <> Cells.unpad(t)
+
+def Cell.repad(c: Cell, +rest: List<&2, Cell>) -> List<&2, Cell>:
+  match c:
+    case Cell.Of{+g, k}:
+      Cell.Of{g, k} <> Bool.pick(List<&2, Cell>, U32.is_eq(X.Ansi.width(g), 2), Cell.Pad{} <> rest, rest)
+    case Cell.Pad{}:
+      rest
+
+def Cells.repad(cs: List<&2, Cell>) -> List<&2, Cell>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case c <> t:
+      Cell.repad(c, Cells.repad(t))
+
+def Cells.first(cs: List<&2, List<&2, Cell>>) -> List<&2, Cell>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case r <> t:
+      r
+
+def Cells.last_look(cs: List<&2, Cell>, +dflt: Look) -> Look:
+  match cs:
+    case Nil{}:
+      dflt
+    case c <> t:
+      Cells.last_look(t, Cell.look_of(c, dflt))
+
+# a truncated line: the part before the ellipsis placed from the front,
+# the part after it from the back
+def Txt.cut.ell(+us: List<&2, X.Un>, +line: List<&2, Cell>) -> List<&2, Cell>:
+  +pre = Cells.first(Al.align(Un.pre(us), line))
+  +post = Cells.repad(List.reverse(&2, Cell, Cells.unpad(Cells.first(Al.align(List.reverse(&2, X.Un, Un.post(us)), List.reverse(&2, Cell, line))))))
+  List.append(&2, Cell, pre, Cell.Of{"…", Cells.last_look(pre, Cells.last_look(List.take(&2, Cell, post, 1n), Look.plain()))} <> post)
+
+def Txt.cut.if(+us: List<&2, X.Un>, +line: List<&2, Cell>, ell: Bool) -> List<&2, List<&2, Cell>>:
+  match ell:
+    case True{}:
+      [Txt.cut.ell(us, line)]
+    case False{}:
+      Al.align(us, line)
+
+def Txt.cut(+line: List<&2, Cell>, +us: List<&2, X.Un>) -> List<&2, List<&2, Cell>>:
+  Txt.cut.if(us, line, Un.has_ell(us))
+
+def Txt.wrap(+line: List<&2, Cell>, wrap: Wrap, +w: Nat) -> List<&2, List<&2, Cell>>:
+  match wrap:
+    case Wrap.Word{}:
+      Al.align(X.Ansi.units(X.Ansi.wrap(Cells.plain(line), U32.from_nat(w), False{})), line)
+    case Wrap.Hard{}:
+      Al.align(X.Ansi.units(X.Ansi.wrap(Cells.plain(line), U32.from_nat(w), True{})), line)
+    case Wrap.Cut{at}:
+      Txt.cut(line, X.Ansi.units(X.Ansi.truncate(Cells.plain(line), U32.from_nat(w), at)))
+
+def Txt.wrap.all(ls: List<&2, List<&2, Cell>>, +wrap: Wrap, +w: Nat) -> List<&2, List<&2, Cell>>:
+  match ls:
+    case Nil{}:
+      Nil{}
+    case l <> t:
+      List.append(&2, List<&2, Cell>, Txt.wrap(l, wrap, w), Txt.wrap.all(t, wrap, w))
+
+# a text's rows at width w
+def Txt.rows(sp: List<&2, Span>, +wrap: Wrap, +w: Nat) -> List<&2, List<&2, Cell>>:
+  Txt.wrap.all(Txt.lines(sp), wrap, w)
+
+# Measures
+# --------
+# View.width is a view's natural width, its widest row unwrapped;
+# View.height the rows it takes at a width when nothing bounds it, the
+# height of an inline frame.
+
+def Lines.widest(+st: C.Style, ls: List<&2, String>) -> Nat:
+  match ls:
+    case Nil{}:
+      0n
+    case s <> t:
+      Nat.max(List.length(&2, Cell, Cell.text(st, s)), Lines.widest(st, t))
+
+def Size.nat(b: Size, +nat: Nat) -> Nat:
+  match b:
+    case Size.Cols{n}:
+      n
+    case other:
+      nat
+
+def Size.of(b: Size, +nat: Nat, +whole: Nat) -> Nat:
+  match b:
+    case Size.Auto{}:
+      nat
+    case Size.Cols{n}:
+      n
+    case Size.Pct{p}:
+      Nat.div(Nat.mul(whole, p), 100n)
+
+def Lay.gapif(rest: List<&2, Flex>, +g: Nat) -> Nat:
+  match rest:
+    case Nil{}:
+      0n
+    case f <> t:
+      g
+
+def View.width(+v: View) -> Nat:
+  match v:
+    case View.Text{st, s}:
+      List.length(&2, Cell, Cell.text(st, s))
+    case Lines{st, ls}:
+      Lines.widest(st, ls)
+    case Fill{c}:
+      0n
+    case Above{top, bottom, rows}:
+      Nat.max(View.width(top), View.width(bottom))
+    case Below{top, bottom, rows}:
+      Nat.max(View.width(top), View.width(bottom))
+    case Beside{left, right, cols}:
+      Nat.add(cols, View.width(right))
+    case After{left, right, cols}:
+      Nat.add(View.width(left), cols)
+    case Split{left, right, num, den}:
+      Nat.add(View.width(left), View.width(right))
+    case Stack{top, bottom, num, den}:
+      Nat.max(View.width(top), View.width(bottom))
+    case Boxed{title, child}:
+      2n+Nat.max(View.width(child), List.length(&2, Cell, Cell.text(Style.plain(), title)))
+    case Menu{items, sel}:
+      Lines.widest(Style.plain(), items)
+    case Input{text, cursor}:
+      1n+List.length(&2, Cell, Cell.text(Style.plain(), text))
+    case Progress{done, total, st}:
+      0n
+    case View.Txt{spans, wrap}:
+      Cells.widest(Txt.lines(spans))
+    case Row{kids, gap, justify, align}:
+      match kids:
+        case Nil{}:
+          0n
+        case Flex{fv, g, s, b} <> rest:
+          Nat.add(Size.nat(b, View.width(fv)), Nat.add(Lay.gapif(rest, gap), View.width(Row{rest, gap, justify, align})))
+    case Col{kids, gap, justify, align}:
+      match kids:
+        case Nil{}:
+          0n
+        case Flex{fv, g, s, b} <> rest:
+          Nat.max(View.width(fv), View.width(Col{rest, gap, justify, align}))
+    case Pad{t, r, b, l, child}:
+      Nat.add(Nat.add(l, r), View.width(child))
+    case Border{line, st, title, child}:
+      2n+Nat.max(View.width(child), 4n+Cells.widest(Txt.lines(title)))
+    case Sized{sw, sh, child}:
+      Size.nat(sw, View.width(child))
+
+# The flex arithmetic. A container's children, in order: the sum of
+# their bases, of their grow factors, of shrink times basis (flexbox
+# shrinks in proportion to both), and their count.
+type Sums is Data:
+  Sums{b: Nat, g: Nat, s: Nat, n: Nat}
+
+def Sums.add(+bb: Nat, +g: Nat, +s: Nat, r: Sums) -> Sums:
+  match r:
+    case Sums{b, gg, ss, n}:
+      Sums{Nat.add(bb, b), Nat.add(g, gg), Nat.add(Nat.mul(s, bb), ss), 1n+n}
+
+# the main size of the first child: its basis, plus its share of the
+# free space by grow, or less its share of the overflow by shrink
+def Lay.first(+bb: Nat, +g: Nat, +s: Nat, su: Sums, +gap: Nat, +w: Nat) -> Nat:
+  match su:
+    case Sums{b, gg, ss, n}:
+      +tot = Nat.add(b, Nat.mul(gap, Nat.sub(n, 1n)))
+      Bool.pick(Nat, Nat.is_le(tot, w),
+        Nat.add(bb, Nat.div(Nat.mul(Nat.sub(w, tot), g), Nat.max(gg, 1n))),
+        Nat.sub(bb, Nat.div(Nat.mul(Nat.sub(tot, w), Nat.mul(s, bb)), Nat.max(ss, 1n))))
+
+# the space justify places: what is left when no child grows
+def Lay.free(su: Sums, +gap: Nat, +w: Nat) -> Nat:
+  match su:
+    case Sums{b, gg, ss, n}:
+      Bool.pick(Nat, Nat.is_zero(gg), Nat.sub(w, Nat.add(b, Nat.mul(gap, Nat.sub(n, 1n)))), 0n)
+
+def Lay.count(su: Sums) -> Nat:
+  match su:
+    case Sums{b, g, s, n}:
+      n
+
+def Lay.lead(j: Justify, +free: Nat, +n: Nat) -> Nat:
+  match j:
+    case Justify.Start{}:
+      0n
+    case Justify.End{}:
+      free
+    case Justify.Center{}:
+      Nat.div(free, 2n)
+    case Justify.Between{}:
+      0n
+    case Justify.Around{}:
+      Nat.div(free, Nat.max(Nat.mul(2n, n), 1n))
+    case Justify.Evenly{}:
+      Nat.div(free, 1n+n)
+
+def Lay.between(j: Justify, +free: Nat, +n: Nat, +gap: Nat) -> Nat:
+  match j:
+    case Justify.Between{}:
+      Nat.add(gap, Nat.div(free, Nat.max(Nat.sub(n, 1n), 1n)))
+    case Justify.Around{}:
+      Nat.add(gap, Nat.div(free, Nat.max(n, 1n)))
+    case Justify.Evenly{}:
+      Nat.add(gap, Nat.div(free, 1n+n))
+    case other:
+      gap
+
+def Lay.row_sums(kids: List<&2, Flex>, +w: Nat) -> Sums:
+  match kids:
+    case Nil{}:
+      Sums{0n, 0n, 0n, 0n}
+    case Flex{v, g, s, b} <> t:
+      Sums.add(Size.of(b, View.width(v), w), g, s, Lay.row_sums(t, w))
+
+def Lay.row_first(+kids: List<&2, Flex>, +w: Nat, +gap: Nat) -> Nat:
+  match kids:
+    case Nil{}:
+      0n
+    case Flex{v, g, s, b} <> t:
+      Lay.first(Size.of(b, View.width(v), w), g, s, Lay.row_sums(kids, w), gap, w)
+
+def Lay.row_lead(+kids: List<&2, Flex>, +w: Nat, +gap: Nat, j: Justify) -> Nat:
+  +su = Lay.row_sums(kids, w)
+  Lay.lead(j, Lay.free(su, gap, w), Lay.count(su))
+
+def Lay.row_between(+kids: List<&2, Flex>, +w: Nat, +gap: Nat, j: Justify) -> Nat:
+  +su = Lay.row_sums(kids, w)
+  Lay.between(j, Lay.free(su, gap, w), Lay.count(su), gap)
+
+# a child's width across a Col: all of it when stretched, else its own
+def Lay.cross_w(a: Align, +v: View, +w: Nat) -> Nat:
+  match a:
+    case Align.Stretch{}:
+      w
+    case other:
+      Nat.min(View.width(v), w)
+
+def Lay.is_stretch(a: Align) -> Bool:
+  match a:
+    case Align.Stretch{}:
+      True{}
+    case other:
+      False{}
+
+# the rest of a container after its first child is laid out as Start
+# with the gap the first one left; the termination check needs the
+# rebuilt node to keep its own fields, so this rides beside it
+type Cont is Data:
+  Cont.No{}
+  Cont.Gap{g: Nat}
+
+def Cont.gap(c: Cont, +gap: Nat) -> Nat:
+  match c:
+    case Cont.No{}:
+      gap
+    case Cont.Gap{g}:
+      g
+
+def Cont.just(c: Cont, j: Justify) -> Justify:
+  match c:
+    case Cont.No{}:
+      j
+    case Cont.Gap{g}:
+      Justify.Start{}
+
+def View.height.go(+v: View, +w: Nat, +cont: Cont) -> Nat:
+  match v:
+    case View.Text{st, s}:
+      1n
+    case Lines{st, ls}:
+      List.length(&2, String, ls)
+    case Fill{c}:
+      1n
+    case Above{top, bottom, rows}:
+      Nat.add(rows, View.height.go(bottom, w, Cont.No{}))
+    case Below{top, bottom, rows}:
+      Nat.add(View.height.go(top, w, Cont.No{}), rows)
+    case Beside{left, right, cols}:
+      Nat.max(View.height.go(left, cols, Cont.No{}), View.height.go(right, Nat.sub(w, cols), Cont.No{}))
+    case After{left, right, cols}:
+      Nat.max(View.height.go(left, Nat.sub(w, cols), Cont.No{}), View.height.go(right, cols, Cont.No{}))
+    case Split{left, right, num, den}:
+      +cols = Nat.div(Nat.mul(w, num), Nat.max(den, 1n))
+      Nat.max(View.height.go(left, cols, Cont.No{}), View.height.go(right, Nat.sub(w, cols), Cont.No{}))
+    case Stack{top, bottom, num, den}:
+      Nat.add(View.height.go(top, w, Cont.No{}), View.height.go(bottom, w, Cont.No{}))
+    case Boxed{title, child}:
+      2n+View.height.go(child, Nat.sub(w, 2n), Cont.No{})
+    case Menu{items, sel}:
+      List.length(&2, String, items)
+    case Input{text, cursor}:
+      1n
+    case Progress{done, total, st}:
+      1n
+    case View.Txt{spans, wrap}:
+      List.length(&2, List<&2, Cell>, Txt.rows(spans, wrap, w))
+    case Row{kids, gap, justify, align}:
+      match kids:
+        case Nil{}:
+          0n
+        case Flex{fv, g, s, b} <> rest:
+          +ks = {Flex{fv, g, s, b} <> rest : List<&2, Flex>}
+          +eg = Cont.gap(cont, gap)
+          +ej = Cont.just(cont, justify)
+          +lead = Lay.row_lead(ks, w, eg, ej)
+          +kw = Lay.row_first(ks, w, eg)
+          +btw = Lay.row_between(ks, w, eg, ej)
+          Nat.max(View.height.go(fv, kw, Cont.No{}),
+            View.height.go(Row{rest, gap, justify, align}, Nat.sub(w, Nat.add(lead, Nat.add(kw, Lay.gapif(rest, btw)))), Cont.Gap{btw}))
+    case Col{kids, gap, justify, align}:
+      match kids:
+        case Nil{}:
+          0n
+        case Flex{fv, g, s, b} <> rest:
+          Nat.add(Size.nat(b, View.height.go(fv, Lay.cross_w(align, fv, w), Cont.No{})),
+            Nat.add(Lay.gapif(rest, gap), View.height.go(Col{rest, gap, justify, align}, w, Cont.No{})))
+    case Pad{t, r, b, l, child}:
+      Nat.add(Nat.add(t, b), View.height.go(child, Nat.sub(w, Nat.add(l, r)), Cont.No{}))
+    case Border{line, st, title, child}:
+      2n+View.height.go(child, Nat.sub(w, 2n), Cont.No{})
+    case Sized{sw, sh, child}:
+      Size.nat(sh, View.height.go(child, Nat.min(Size.of(sw, View.width(child), w), w), Cont.No{}))
+
+def View.height(+v: View, +w: Nat) -> Nat:
+  View.height.go(v, w, Cont.No{})
+
+def Lay.col_sums(kids: List<&2, Flex>, +w: Nat, +h: Nat, +a: Align) -> Sums:
+  match kids:
+    case Nil{}:
+      Sums{0n, 0n, 0n, 0n}
+    case Flex{+v, g, s, b} <> t:
+      Sums.add(Size.of(b, View.height(v, Lay.cross_w(a, v, w)), h), g, s, Lay.col_sums(t, w, h, a))
+
+def Lay.col_first(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +gap: Nat, +a: Align) -> Nat:
+  match kids:
+    case Nil{}:
+      0n
+    case Flex{v, g, s, b} <> t:
+      Lay.first(Size.of(b, View.height(v, Lay.cross_w(a, v, w)), h), g, s, Lay.col_sums(kids, w, h, a), gap, h)
+
+def Lay.col_lead(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +gap: Nat, j: Justify, +a: Align) -> Nat:
+  +su = Lay.col_sums(kids, w, h, a)
+  Lay.lead(j, Lay.free(su, gap, h), Lay.count(su))
+
+def Lay.col_between(+kids: List<&2, Flex>, +w: Nat, +h: Nat, +gap: Nat, j: Justify, +a: Align) -> Nat:
+  +su = Lay.col_sums(kids, w, h, a)
+  Lay.between(j, Lay.free(su, gap, h), Lay.count(su), gap)
+
+def blank_rows(n: Nat, +w: Nat) -> List<&2, List<&2, Cell>>:
+  List.replicate(List<&2, Cell>, n, List.replicate(Cell, w, Cell.blank()))
+
+def Lay.indent(rows: List<&2, List<&2, Cell>>, +n: Nat) -> List<&2, List<&2, Cell>>:
+  match rows:
+    case Nil{}:
+      Nil{}
+    case r <> t:
+      List.append(&2, Cell, List.replicate(Cell, n, Cell.blank()), r) <> Lay.indent(t, n)
+
+# the offset of a child of size k in a cross size of m
+def Lay.offset(a: Align, +k: Nat, +m: Nat) -> Nat:
+  match a:
+    case Align.End{}:
+      Nat.sub(m, k)
+    case Align.Center{}:
+      Nat.div(Nat.sub(m, k), 2n)
+    case other:
+      0n
+
+# Borders
+# -------
+
+type Glyphs is Data:
+  Glyphs{tl: U32, hz: U32, tr: U32, vt: U32, bl: U32, br: U32}
+
+def Line.glyphs(l: Line) -> Glyphs:
+  match l:
+    case Line.Single{}:
+      Glyphs{9484, 9472, 9488, 9474, 9492, 9496}
+    case Line.Round{}:
+      Glyphs{9581, 9472, 9582, 9474, 9584, 9583}
+    case Line.Double{}:
+      Glyphs{9556, 9552, 9559, 9553, 9562, 9565}
+    case Line.Bold{}:
+      Glyphs{9487, 9473, 9491, 9475, 9495, 9499}
+
+def Glyphs.tl(g: Glyphs) -> U32:
+  match g:
+    case Glyphs{tl, hz, tr, vt, bl, br}:
+      tl
+
+def Glyphs.hz(g: Glyphs) -> U32:
+  match g:
+    case Glyphs{tl, hz, tr, vt, bl, br}:
+      hz
+
+def Glyphs.tr(g: Glyphs) -> U32:
+  match g:
+    case Glyphs{tl, hz, tr, vt, bl, br}:
+      tr
+
+def Glyphs.vt(g: Glyphs) -> U32:
+  match g:
+    case Glyphs{tl, hz, tr, vt, bl, br}:
+      vt
+
+def Glyphs.bl(g: Glyphs) -> U32:
+  match g:
+    case Glyphs{tl, hz, tr, vt, bl, br}:
+      bl
+
+def Glyphs.br(g: Glyphs) -> U32:
+  match g:
+    case Glyphs{tl, hz, tr, vt, bl, br}:
+      br
+
+def Border.title(+gl: Glyphs, +st: C.Style, title: List<&2, Span>, +w: Nat) -> List<&2, Cell>:
+  match title:
+    case Nil{}:
+      Nil{}
+    case s <> t:
+      List.append(&2, Cell, cells_of(1n, Glyphs.hz(gl), st),
+        List.append(&2, Cell, cells_of(1n, 32, st),
+          List.append(&2, Cell, Cells.first(Txt.rows(s <> t, Wrap.Cut{X.Cut.End{}}, Nat.sub(w, 6n))), cells_of(1n, 32, st))))
+
+def Border.top(+gl: Glyphs, +st: C.Style, title: List<&2, Span>, +w: Nat) -> List<&2, Cell>:
+  List.append(&2, Cell, fit(Nat.sub(w, 1n), List.append(&2, Cell, cells_of(1n, Glyphs.tl(gl), st),
+    List.append(&2, Cell, Border.title(gl, st, title, w), cells_of(w, Glyphs.hz(gl), st)))), cells_of(1n, Glyphs.tr(gl), st))
+
+def Border.bottom(+gl: Glyphs, +st: C.Style, +w: Nat) -> List<&2, Cell>:
+  List.append(&2, Cell, fit(Nat.sub(w, 1n), List.append(&2, Cell, cells_of(1n, Glyphs.bl(gl), st), cells_of(w, Glyphs.hz(gl), st))),
+    cells_of(1n, Glyphs.br(gl), st))
+
+def Border.sides(rows: List<&2, List<&2, Cell>>, +gl: Glyphs, +st: C.Style) -> List<&2, List<&2, Cell>>:
+  match rows:
+    case Nil{}:
+      Nil{}
+    case r <> t:
+      List.append(&2, Cell, List.append(&2, Cell, cells_of(1n, Glyphs.vt(gl), st), r), cells_of(1n, Glyphs.vt(gl), st)) <> Border.sides(t, gl, st)
+
 # Render
 # ------
 # draw is one recursive def over the view, each arm the rows a widget
@@ -295,7 +1023,7 @@ def box_corner(+w: Nat, row: List<&2, Cell>, +corner: U32) -> List<&2, Cell>:
 # whole, so a frame is h rows of w cells whatever the view, and the
 # laws render_rows and render_cols are the fit lemmas applied
 
-def draw(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
+def draw.go(+v: View, +w: Nat, +h: Nat, +cont: Cont) -> List<&2, List<&2, Cell>>:
   match v:
     case View.Text{st, s}:
       [Cell.text(st, s)]
@@ -305,29 +1033,29 @@ def draw(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
       List.replicate(List<&2, Cell>, h, List.replicate(Cell, w, c))
     case Above{top, bottom, rows}:
       List.append(&2, List<&2, Cell>,
-        fit_rows(rows, w, draw(top, w, rows)),
-        fit_rows(Nat.sub(h, rows), w, draw(bottom, w, Nat.sub(h, rows))))
+        fit_rows(rows, w, draw.go(top, w, rows, Cont.No{})),
+        fit_rows(Nat.sub(h, rows), w, draw.go(bottom, w, Nat.sub(h, rows), Cont.No{})))
     case Below{top, bottom, rows}:
       List.append(&2, List<&2, Cell>,
-        fit_rows(Nat.sub(h, rows), w, draw(top, w, Nat.sub(h, rows))),
-        fit_rows(rows, w, draw(bottom, w, rows)))
+        fit_rows(Nat.sub(h, rows), w, draw.go(top, w, Nat.sub(h, rows), Cont.No{})),
+        fit_rows(rows, w, draw.go(bottom, w, rows, Cont.No{})))
     case Beside{left, right, cols}:
-      hcat(fit_rows(h, cols, draw(left, cols, h)), fit_rows(h, Nat.sub(w, cols), draw(right, Nat.sub(w, cols), h)))
+      hcat(fit_rows(h, cols, draw.go(left, cols, h, Cont.No{})), fit_rows(h, Nat.sub(w, cols), draw.go(right, Nat.sub(w, cols), h, Cont.No{})))
     case After{left, right, cols}:
-      hcat(fit_rows(h, Nat.sub(w, cols), draw(left, Nat.sub(w, cols), h)), fit_rows(h, cols, draw(right, cols, h)))
+      hcat(fit_rows(h, Nat.sub(w, cols), draw.go(left, Nat.sub(w, cols), h, Cont.No{})), fit_rows(h, cols, draw.go(right, cols, h, Cont.No{})))
     case Split{left, right, num, den}:
       +cols = Nat.div(Nat.mul(w, num), Nat.max(den, 1n))
-      hcat(fit_rows(h, cols, draw(left, cols, h)), fit_rows(h, Nat.sub(w, cols), draw(right, Nat.sub(w, cols), h)))
+      hcat(fit_rows(h, cols, draw.go(left, cols, h, Cont.No{})), fit_rows(h, Nat.sub(w, cols), draw.go(right, Nat.sub(w, cols), h, Cont.No{})))
     case Stack{top, bottom, num, den}:
       +rows = Nat.div(Nat.mul(h, num), Nat.max(den, 1n))
       List.append(&2, List<&2, Cell>,
-        fit_rows(rows, w, draw(top, w, rows)),
-        fit_rows(Nat.sub(h, rows), w, draw(bottom, w, Nat.sub(h, rows))))
+        fit_rows(rows, w, draw.go(top, w, rows, Cont.No{})),
+        fit_rows(Nat.sub(h, rows), w, draw.go(bottom, w, Nat.sub(h, rows), Cont.No{})))
     case Boxed{title, child}:
       List.append(&2, List<&2, Cell>,
         [box_corner(w, box_top(w, title), 9488)],
         List.append(&2, List<&2, Cell>,
-          box_side(fit_rows(Nat.sub(h, 2n), Nat.sub(w, 2n), draw(child, Nat.sub(w, 2n), Nat.sub(h, 2n)))),
+          box_side(fit_rows(Nat.sub(h, 2n), Nat.sub(w, 2n), draw.go(child, Nat.sub(w, 2n), Nat.sub(h, 2n), Cont.No{}))),
           [box_corner(w, box_bottom(w), 9496)]))
     case Menu{items, sel}:
       menu_rows(List.drop(&2, String, items, menu_top(sel, h)), menu_top(sel, h), sel)
@@ -335,9 +1063,93 @@ def draw(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
       [input_cells(Cell.text(Style.plain(), text), cursor)]
     case Progress{done, total, st}:
       [bar_cells(w, done, total, st)]
+    case View.Txt{spans, wrap}:
+      Txt.rows(spans, wrap, w)
+    case Row{kids, gap, justify, align}:
+      match kids:
+        case Nil{}:
+          Nil{}
+        case Flex{fv, g, s, b} <> rest:
+          +ks = {Flex{fv, g, s, b} <> rest : List<&2, Flex>}
+          +eg = Cont.gap(cont, gap)
+          +ej = Cont.just(cont, justify)
+          +lead = Lay.row_lead(ks, w, eg, ej)
+          +kw = Lay.row_first(ks, w, eg)
+          +btw = Lay.row_between(ks, w, eg, ej)
+          +gi = Lay.gapif(rest, btw)
+          +kh = Bool.pick(Nat, Lay.is_stretch(align), h, Nat.min(View.height(fv, kw), h))
+          +rw = Nat.sub(w, Nat.add(lead, Nat.add(kw, gi)))
+          hcat(blank_rows(h, lead),
+            hcat(fit_rows(h, kw, List.append(&2, List<&2, Cell>, blank_rows(Lay.offset(align, kh, h), kw), fit_rows(kh, kw, draw.go(fv, kw, kh, Cont.No{})))),
+              hcat(blank_rows(h, gi), fit_rows(h, rw, draw.go(Row{rest, gap, justify, align}, rw, h, Cont.Gap{btw})))))
+    case Col{kids, gap, justify, align}:
+      match kids:
+        case Nil{}:
+          Nil{}
+        case Flex{fv, g, s, b} <> rest:
+          +ks = {Flex{fv, g, s, b} <> rest : List<&2, Flex>}
+          +eg = Cont.gap(cont, gap)
+          +ej = Cont.just(cont, justify)
+          +cw = Lay.cross_w(align, fv, w)
+          +lead = Lay.col_lead(ks, w, h, eg, ej, align)
+          +kh = Lay.col_first(ks, w, h, eg, align)
+          +btw = Lay.col_between(ks, w, h, eg, ej, align)
+          +gi = Lay.gapif(rest, btw)
+          List.append(&2, List<&2, Cell>, blank_rows(lead, w),
+            List.append(&2, List<&2, Cell>, Lay.indent(fit_rows(kh, cw, draw.go(fv, cw, kh, Cont.No{})), Lay.offset(align, cw, w)),
+              List.append(&2, List<&2, Cell>, blank_rows(gi, w),
+                draw.go(Col{rest, gap, justify, align}, w, Nat.sub(h, Nat.add(lead, Nat.add(kh, gi))), Cont.Gap{btw}))))
+    case Pad{t, r, b, l, child}:
+      +cw = Nat.sub(w, Nat.add(l, r))
+      +ch = Nat.sub(h, Nat.add(t, b))
+      List.append(&2, List<&2, Cell>, blank_rows(t, w),
+        List.append(&2, List<&2, Cell>, Lay.indent(fit_rows(ch, cw, draw.go(child, cw, ch, Cont.No{})), l), blank_rows(b, w)))
+    case Border{line, st, title, child}:
+      +gl = Line.glyphs(line)
+      List.append(&2, List<&2, Cell>, [Border.top(gl, st, title, w)],
+        List.append(&2, List<&2, Cell>,
+          Border.sides(fit_rows(Nat.sub(h, 2n), Nat.sub(w, 2n), draw.go(child, Nat.sub(w, 2n), Nat.sub(h, 2n), Cont.No{})), gl, st),
+          [Border.bottom(gl, st, w)]))
+    case Sized{sw, sh, child}:
+      +cw = Nat.min(Size.of(sw, View.width(child), w), w)
+      +ch = Nat.min(Size.of(sh, h, h), h)
+      fit_rows(ch, cw, draw.go(child, cw, ch, Cont.No{}))
+
+def draw(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
+  draw.go(v, w, h, Cont.No{})
 
 def render(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
   fit_rows(h, w, draw(v, w, h))
+
+# Shorthands, with Ink's defaults
+
+def txt(s: String) -> View:
+  View.Txt{[Span.S{s}], Wrap.Word{}}
+
+def spans(sp: List<&2, Span>) -> View:
+  View.Txt{sp, Wrap.Word{}}
+
+def Span.of(st: C.Style, s: String) -> Span:
+  Span.In{st, [Span.S{s}]}
+
+def Flex.of(v: View) -> Flex:
+  Flex{v, 0n, 1n, Size.Auto{}}
+
+def Flex.grow(v: View) -> Flex:
+  Flex{v, 1n, 1n, Size.Auto{}}
+
+def Row.of(kids: List<&2, Flex>) -> View:
+  Row{kids, 0n, Justify.Start{}, Align.Stretch{}}
+
+def Col.of(kids: List<&2, Flex>) -> View:
+  Col{kids, 0n, Justify.Start{}, Align.Stretch{}}
+
+def View.pad(+n: Nat, v: View) -> View:
+  Pad{n, n, n, n, v}
+
+# a margin is padding outside a border
+def View.margin(t: Nat, r: Nat, b: Nat, l: Nat, v: View) -> View:
+  Pad{t, r, b, l, v}
 
 # Frames to strings
 # -----------------
@@ -368,20 +1180,6 @@ def Cell.same_look(c: Cell, +k: Look) -> Bool:
       Look.is_eq(k2, k)
     case Cell.Pad{}:
       True{}
-
-def Cell.str(c: Cell) -> String:
-  match c:
-    case Cell.Of{g, k}:
-      g
-    case Cell.Pad{}:
-      ""
-
-def Cell.look_of(c: Cell, +dflt: Look) -> Look:
-  match c:
-    case Cell.Of{g, k}:
-      k
-    case Cell.Pad{}:
-      dflt
 
 # a row as runs of one look, each painted whole: the text of the run in
 # progress is acc, its look k
@@ -478,37 +1276,6 @@ def Tui.fold(~M: Data, ~step: M -> T.Key -> Maybe<&2, M>, ks: List<&2, T.Key>, n
 # the first line that changed. With no terminal, nothing moves the
 # cursor: done lines are written as they come, the live frame once at
 # the end.
-
-# the rows a view takes at width w when nothing bounds its height
-def View.height(+v: View, +w: Nat) -> Nat:
-  match v:
-    case View.Text{st, s}:
-      1n
-    case Lines{st, ls}:
-      List.length(&2, String, ls)
-    case Fill{c}:
-      1n
-    case Above{top, bottom, rows}:
-      Nat.add(rows, View.height(bottom, w))
-    case Below{top, bottom, rows}:
-      Nat.add(View.height(top, w), rows)
-    case Beside{left, right, cols}:
-      Nat.max(View.height(left, cols), View.height(right, Nat.sub(w, cols)))
-    case After{left, right, cols}:
-      Nat.max(View.height(left, Nat.sub(w, cols)), View.height(right, cols))
-    case Split{left, right, num, den}:
-      +cols = Nat.div(Nat.mul(w, num), Nat.max(den, 1n))
-      Nat.max(View.height(left, cols), View.height(right, Nat.sub(w, cols)))
-    case Stack{top, bottom, num, den}:
-      Nat.add(View.height(top, w), View.height(bottom, w))
-    case Boxed{title, child}:
-      2n+View.height(child, Nat.sub(w, 2n))
-    case Menu{items, sel}:
-      List.length(&2, String, items)
-    case Input{text, cursor}:
-      1n
-    case Progress{done, total, st}:
-      1n
 
 def Row.empty(cs: List<&2, Cell>) -> Bool:
   match cs:
