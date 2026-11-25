@@ -2,14 +2,19 @@
 
 Terminal interfaces for [Bend](https://bend-lang.com) 2, on
 [bend-tty](https://github.com/caiodomingues/bend-tty). A `View` is a tree of
-widgets; `render` lays it out into a frame of cells; `Frame.diff` writes only
-the rows that changed; `Tui.run` is the loop, in the shape of Base's `App.run`.
-Requires Bend 2.0.40, as bend-tty does.
+widgets; `render` lays it out into a frame of cells. Two loops draw it:
+`Tui.run`, a full-screen app on the alternate screen, and `Cli.run`, a
+command-line flow drawn inline under what the program printed, as Ink
+does. Requires Bend 2.0.40, as bend-tty does, and bend-tty's
+`Tty.inline` (branch `feat/inline-guard` until it is merged).
 
-Two facts about every frame are theorems, not tests: it has exactly `h`
+Some facts about every frame are theorems, not tests: it has exactly `h`
 rows, and every row has exactly `w` cells, for every view, size and state
-(`render_rows`, `render_cols`); and a frame diffed against itself writes
-nothing (`diff_self`), so an idle screen costs no output.
+(`render_rows`, `render_cols`); a frame diffed against itself writes
+nothing (`diff_self`); an inline screen drawn again unchanged writes
+nothing (`inline_same`), each line above the live frame is written once
+(`static_once`), and with no terminal a draw writes only those lines,
+never a cursor movement (`pipe_plain`).
 
 ```python
 import Base
@@ -55,9 +60,22 @@ That is `demos/dashboard.bend`. `demos/todo.bend` is a list with an input:
 type and Enter to add, Up/Down, Tab to mark done, Delete, Esc. Ctrl-C quits
 any `Tui.run`. `demos/life.bend` is Conway's Game of Life on a 60x16 grid, a
 generation per tick and every row in its own color: Space pauses, r reseeds,
-Esc quits.
+Esc quits. `demos/steps.bend` is a `Cli.run`: work that posts lines and
+progress, the lines printed once above a live spinner and bar, a summary
+left at the end; piped, the lines and the summary alone.
 
 ## API
+
+**Cells and looks.** A cell holds a grapheme cluster, as bend-tty's
+`X.Ansi.units` cuts a string, so CJK and emoji line up: a cluster two
+columns wide takes two cells, the cluster (`Cell.Of{g, look}`) and a
+`Cell.Pad{}`, and `fit` blanks one whose second column is cut off. A look
+is `Look.Of{st, link}`: bend-tty's `C.Style` (colours at any level,
+bold, dim, italic, underline, inverse, hidden, strike) and an OSC 8 link
+(`""` for none). A control character in a string (below 32, or 127 to
+159) is drawn as a blank, so text cannot move the cursor or start an
+escape. `Style.plain()`, `Style.fg(c)` and `Style.bold(c)` (a 256-colour
+code) and `Style.inverse()` build `C.Style`s.
 
 **Views** (`View`, all `Data`):
 
@@ -71,37 +89,67 @@ Esc quits.
 | `Split{left, right, num, den}` / `Stack{top, bottom, num, den}` | a split by ratio: `w * num / den` columns for the left, `h * num / den` rows for the top |
 | `Boxed{title, child}` | a border with the title on it; the child inside |
 | `Menu{items, sel}` | a row per item, item `sel` inverse, scrolled so that it is on screen |
-| `Input{text, cursor}` | one row; the cell at `cursor` inverse |
+| `Input{text, cursor}` | one row; the cluster at `cursor` inverse |
 | `Progress{done, total, st}` | one row, filled `done / total` of the width |
 
 A widget's rows are cut or padded to the area it gets; nothing overflows.
-A control character in a string (below 32, or 127) is drawn as a blank, so
-text cannot move the cursor or start an escape. `Style{fg, bg, bold}` uses
-256-color codes, `256` for the terminal's default; `Style.plain()`,
-`Style.fg(c)`, `Style.bold(c)`, `Style.inverse()`.
+`View.height(v, w)` is the rows a view takes at width `w` when nothing
+bounds it, which is the height of an inline frame.
 
-**Frames**: `render(v, w, h)` gives `List<List<Cell>>`, `h` rows of `w`;
-`Frame.show(f)` is the string that paints it all, `Frame.diff(next, prev)` the
-string that paints what changed, row by row.
+**Frames**: `render(v, w, h)` gives `List<List<Cell>>`, `h` rows of `w`.
+A `Pen{level, links}` is how a stream shows looks: its `C.Level` (none
+for `NO_COLOR` or a pipe) and whether links are OSC 8 or spelled out.
+`Frame.show(pen, f)` is the string that paints it all, `Frame.diff(pen,
+next, prev)` the string that paints what changed, row by row.
 
-**The loop** (`run.bend`): `Tui.run(~M, ~Tui{view, update}, m0, ms)` with
-`view: M -> View` and `update: List<Key> -> M -> Maybe<M>`. Each turn: the
-terminal's size, `view` of the state rendered to it, the diff written (the
-whole frame after a resize), the keys read within `ms` (an empty list on a
-timeout: a tick), `update`, which answers the next state or `None` to quit;
-Ctrl-C quits before `update` sees it. A read that ends in a lone ESC gets
-100 ms more before decoding, so an arrow that arrives in two pieces (SSH)
-is an arrow; a lone Esc key is seen 100 ms late. `Tui.fold(~M, ~step, ks, Some{m})`
-folds a `step: M -> Key -> Maybe<M>` over the keys, for updates that treat
-keys one at a time. Both are templates over closed defs, as `App.run` is:
-that is what lets `view` and `update` be called every turn (a closure is
-affine, one call). Since a template's function argument must take affine
-parameters, a `step` or `view` that uses its state twice is a `+m` def
-wrapped in an affine one (`step.at`/`step` in the demos).
+**The full-screen loop** (`run.bend`): `Tui.run(~M, ~Tui{view, update},
+m0, ms)` with `view: M -> View` and `update: List<Key> -> M -> Maybe<M>`.
+Each turn: the terminal's size, `view` of the state rendered to it, the
+diff written (the whole frame after a resize), the keys read within `ms`
+(an empty list on a timeout: a tick), `update`, which answers the next
+state or `None` to quit; Ctrl-C quits before `update` sees it. A read that
+ends in a lone ESC gets 100 ms more before decoding, so an arrow that
+arrives in two pieces (SSH) is an arrow; a lone Esc key is seen 100 ms
+late. `Tui.fold(~M, ~step, ks, Some{m})` folds a `step: M -> Key ->
+Maybe<M>` over the keys, for updates that treat keys one at a time.
 
-The library is two files. `tui.bend` is pure: the views, `render`,
-`Frame.diff`, the `Tui` app type and `Tui.fold`, everything the proofs need.
-`run.bend` holds the loop, which runs bend-tty's effects (`tty_io.bend`);
+**Inline screens.** A `Screen{done, live}` is what a CLI shows: `done`
+views, printed once above, and the `live` view below them, redrawn. The
+pure renderer is `Inline{tty, pen, w, rows, prev, printed}`:
+`Inline.draw(st, screen)` answers `Inline.Out{text, next}`. On a terminal
+the cursor rests at the start of the row below the frame; done views not
+yet written go above a whole new frame, or else the frame is redrawn from
+its first changed line, inside synchronized output; a frame taller than
+the terminal shows its last `rows - 1` lines. `Inline.end(st, screen)`
+writes the last done views and the whole final frame, unclipped, so the
+scrollback holds all of it. With no terminal, done views are written as
+they come, the live frame once at the end, and nothing moves the cursor.
+
+**The inline loop** (`run.bend`): `Cli.run(~M, ~Msg, ~Cli{view, update,
+keys}, m0, work, tick)` answers the last state. `view: M -> Screen`,
+`update: Ev<Msg> -> M -> Step<M>` (`Step.Go{m}` or `Step.End{m}`),
+`keys: M -> Bool`. `work: Chan(Ev<Msg>) -> IO(Unit)` runs as its own
+computation and posts messages with `Cli.post(Msg, ch, m)`; when it
+returns, the loop gets `Ev.Done`. Each turn takes one event: the next
+message, or, while `keys(m)` holds, the keys of a read (raw mode is on
+only then), or `Ev.Tick` when nothing came within `tick` ms. Ctrl-C is
+`Ev.Cancel`, and the loop stops after it whatever `update` answers. The
+output is live when stdout is a terminal, `TERM` is not `dumb` and `CI`
+is unset (as Ink decides); colours follow bend-tty's `Level` alone, so
+`NO_COLOR` and pipes get plain text and `FORCE_COLOR` gets colours with
+no cursor movement. While it runs, `Tty.inline` makes the exit and, on the
+native lane, SIGINT, SIGTERM and SIGHUP show the cursor again.
+
+Loops are templates over closed defs, as `App.run` is: that is what lets
+`view` and `update` be called every turn (a closure is affine, one call).
+Since a template's function argument must take affine parameters, a
+`step` or `view` that uses its state twice is a `+m` def wrapped in an
+affine one (`step.at`/`step` in the demos), and `work` takes its channel
+affine and rebinds it (`+ch = c`) to post more than once.
+
+The library is two files. `tui.bend` is pure: the views, `render`, the
+frames, the inline renderer, the app types, everything the proofs need.
+`run.bend` holds the loops, which run bend-tty's effects (`tty_io.bend`);
 a proof may import no foreign code, so the split keeps `PROOF.bend` on the
 pure file. A program imports `tui.bend` and `run.bend`, and `tty.bend` to
 name the keys (`T.Up{}`): Bend does not re-export imports, and an alias is
@@ -115,50 +163,63 @@ per file.
 | `fit_rows_len(h, w, rows)`, `fit_rows_cols(h, w, rows)` | `h` rows; every one of `w` cells |
 | `render_rows(v, w, h)` | `length(render(v, w, h)) == h`, for every view |
 | `render_cols(v, w, h)` | every row of `render(v, w, h)` has `w` cells, for every view |
-| `diff_self(f)` | `Frame.diff(f, f) == ""` |
+| `diff_self(p, f)` | `Frame.diff(p, f, f) == ""` |
+| `lines_first_same(ls, i)` | two lists of the same lines have no first difference |
+| `inline_same(st, s)` | drawing a screen again, unchanged, writes `""`, on a terminal or not |
+| `static_once(st, done, more, live)` | after a draw, the done views left to write are exactly those added since |
+| `pipe_plain(prev, fresh, next)` | with no terminal, a draw writes the new done lines joined by line breaks, nothing else |
 
 `fit` and `fit_rows` recurse on the size, so each count is one induction on
 it, and `render` is `fit_rows` of `draw`, so its laws are those applied: the
-theorem about every widget costs two lines. `diff_self` is reflexivity of the
-comparisons from `U32.cmp` and `Bool.cmp` up (`u32_cmp_refl`, `bool_cmp_refl`
-from [bend-lemmas](https://github.com/caiodomingues/bend-lemmas)) and a
-concat of empty strings. `bend PROOF.bend` prints `ALL PROOFS CHECK`; it
-imports `tui.bend` alone, since importing `run.bend`, or any file with
-foreign code, fails the verdict. `bend LAWS.bend` states the laws without
-their proofs, so it prints `SOME PROOFS FAIL` with its 6 TODOs.
+theorem about every widget costs two lines. `diff_self` is reflexivity of
+the comparisons, from `U32.cmp` and `Bool.cmp` up through colours, styles,
+looks and cells (`u32_cmp_refl`, `bool_cmp_refl` from
+[bend-lemmas](https://github.com/caiodomingues/bend-lemmas)), and a concat
+of empty strings. `inline_same` is a drop of the done list by its own
+length, which is empty, and `lines_first_same`; `static_once` is the drop
+of a longer list. `bend PROOF.bend` prints `ALL PROOFS CHECK`; it imports
+`tui.bend` alone, since importing `run.bend`, or any file with foreign
+code, fails the verdict. `bend LAWS.bend` states the laws without their
+proofs, so it prints `SOME PROOFS FAIL` with its TODOs.
 
 ## Lanes
 
 - **Native** (`bend demos/todo.bend -o todo`): verified on Linux (WSL) with
-  Bend 2.0.37 under an 80x24 pty: typing, Enter, arrows, Tab, Delete and Esc
-  in the todo, the dashboard ticking at 100 ms, Space and r in life, each
-  quitting with exit 0; the output of all three is byte for byte that of
-  their Bend 2.0.23 builds. On 2.0.23 it was also verified with Ctrl-C,
-  every row exactly 40 cells at 40x12 and 90 at 90x24, a resize to 60x20
-  mid-run repainted at the new size, an arrow split into ESC and `[B` up to
-  80 ms apart decoded as an arrow, and SIGTERM on the alternate screen
-  leaving the shell with its cursor, main screen and echo.
-- **JS** (`bend demos/todo.bend`, or `-o todo.js` and `bun todo.js`): the
-  same three runs under bun 1.4.2, byte for byte the output of the 2.0.23 JS
-  builds. bun, not node: bend-tty's read reaches libc through `bun:ffi`.
+  Bend 2.0.40 under an 80x24 pty: typing (a CJK character too), Enter,
+  arrows, Tab and Esc in the todo, the dashboard ticking at 100 ms and
+  quitting on Ctrl-C, Space and r in life, each quitting with exit 0 and
+  the cursor shown; SIGTERM on the todo leaves the main screen and the
+  cursor. `demos/steps.bend` under a pty: each line above written once, the
+  live line redrawn alone (up one row, erase down), the summary left with
+  the cursor shown; Ctrl-C and SIGTERM mid-task end it with the cursor
+  shown; a resize to 50 columns mid-run redraws at the new width; a live
+  frame of 30 lines in 24 rows shows its last 23, then all 30 once at the
+  end. Piped, and with `NO_COLOR=1`, its output holds no ESC byte.
+- **JS** (`bend demos/todo.bend -o todo.js` and `bun todo.js`): the same
+  runs under bun 1.4.2, the same bytes for `steps` but for timing. bun, not
+  node: bend-tty's read reaches libc through `bun:ffi`. A signal ends a JS
+  program with the terminal as it was (bend-tty hooks none on this lane,
+  since the runtime never yields to bun's signal listeners): Ctrl-C during
+  a `Cli.run` task leaves the cursor hidden (`tput cnorm` shows it).
 - A file that runs effects fails the verdict by design: `bend run.bend
   --check-only` and `bend demos/todo.bend --check-only` print `SOME PROOFS
   FAIL` and list the defs that rely on foreign code. For those the gate is
   the build.
 
-Not in v1: mouse, wide characters (one cell is one column), a resize signal
-(the size is read each turn instead), a cursor for `Input` (it is drawn
-inverse, not moved), a sequence split across the `max` of a read.
+Not in v1: mouse, a resize signal (the size is read each turn instead), a
+cursor for `Input` (it is drawn inverse, not moved), a sequence split
+across the `max` of a read, wrapped text and flex layout (next).
 
 ## Run
 
     bend tui.bend                        # renders a sample as text
     bend PROOF.bend                      # ALL PROOFS CHECK
-    bend LAWS.bend                       # SOME PROOFS FAIL: 6 TODOs, the laws unproven
+    bend LAWS.bend                       # SOME PROOFS FAIL: the laws as TODOs
     bend demos/todo.bend -o todo && ./todo
     bend demos/dashboard.bend -o dashboard && ./dashboard
     bend demos/life.bend -o life && ./life
+    bend demos/steps.bend -o steps && ./steps     # and ./steps | cat
 
-Depends on `../bend-tty` (`tty.bend` for the escapes and keys,
-`tty_io.bend` for the effects) and, for the proofs, `../bend-lemmas` (two
-lemmas): clone the three side by side.
+Depends on `../bend-tty` (`tty.bend`, `color.bend` and `text.bend`, and
+`tty_io.bend` for the effects) and, for the proofs, `../bend-lemmas`:
+clone the three side by side.
