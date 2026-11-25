@@ -306,10 +306,13 @@ def Cli.live_of(st: U.Inline) -> Bool:
     case U.Inline{tty, p, w, rows, prev, printed, up, cur}:
       tty
 
-# the last frame written whole, the cursor shown, raw mode off
-def Cli.end(-M: Data, -Msg: Data, app: U.Cli<M, Msg>, +st: U.Inline, +m: M, raw: Bool) -> IO(M):
+# the last frame written whole, the cursor shown, raw mode off; the
+# channel closed, so work still posting fails at once instead of
+# waiting for a reader forever
+def Cli.end(-M: Data, -Msg: Data, app: U.Cli<M, Msg>, ch: Chan(U.Ev<Msg>), +st: U.Inline, +m: M, raw: Bool) -> IO(M):
   U.Cli{view, update, keys} = app
   do IO<M>:
+    Chan.close(U.Ev<Msg>, ch)
     IO.write(U.Inline.end(st, view(m)) ++ Cli.show(Cli.live_of(st)))
     Cli.unraw(raw)
     Cli.inline(Cli.live_of(st), False{})
@@ -348,13 +351,13 @@ def Cli.step(-M: Data, -Msg: Data, app: U.Cli<M, Msg>, +ch: Chan(U.Ev<Msg>), +st
 def Cli.loop(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, fuel: Nat, +ch: Chan(U.Ev<Msg>), st: U.Inline, m: M, raw: Bool, +tick: U32) -> IO(M):
   match fuel:
     case 0n:
-      Cli.end(M, Msg, app, st, m, raw)
+      Cli.end(M, Msg, app, ch, st, m, raw)
     case 1n+f:
       do IO<M>:
         wh : U32 & U32 <- IOT.Tty.size()
         Cli.step(M, Msg, app, ch, st, wh, m, raw, tick,
           s2 => m2 => r2 => Cli.loop(~M, ~Msg, ~app, f, ch, s2, m2, r2, tick),
-          s2 => m2 => r2 => Cli.end(M, Msg, app, s2, m2, r2))
+          s2 => m2 => r2 => Cli.end(M, Msg, app, ch, s2, m2, r2))
 
 def Cli.start(~M: Data, ~Msg: Data, ~app: U.Cli<M, Msg>, +live: Bool, l: C.Level, wh: U32 & U32, +ch: Chan(U.Ev<Msg>), m0: M, +tick: U32) -> IO(M):
   (w, h) = wh
