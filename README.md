@@ -75,7 +75,8 @@ line's place. `demos/tasks.bend` is a listr2 task list with nested
 tasks, one failing; each top task is printed once as it finishes.
 `demos/prompts.bend` asks what `ogw new` will ask: a template (select),
 features (multi-select), whether to install (confirm) and a name (text,
-placeholder `my-game`); a cancel ends the flow.
+placeholder `my-game`), then prints a note with the next steps; a cancel
+ends the flow.
 
 ## API
 
@@ -129,6 +130,8 @@ string-width says. Shorthands with Ink's defaults: `txt(s)`, `spans(sp)`,
 | `Task{title, state, out, kids}` | listr2's task list: `Task.Wait{}` dim `◼`, `Task.Run{}` a yellow spinner (`❯` for a parent), `Task.Ok{}` green `✓`, `Task.Fail{msg}` red `✗` and `› msg`, `Task.Skip{msg}` yellow `↓`; `Task.view(tick, ts)` shows subtasks two columns in while their parent runs or when one failed, and a running task's `out` under it after `›`; `Task.put(ts, path, edit)` sets a state (`Task.To{st}`) or an output line (`Task.Say{s}`) at a path of sibling indexes |
 | `Badge.view(st, s)`, `Link.view(url, text)` | spans: ` s ` inverse in `st`; an OSC 8 link, `text (url)` where links are off |
 | `View.Edit{chars, cursor, placeholder}` | a view: a text field's row; the character at `cursor` (a blank past the end) is a `Cell.At`, where an inline frame puts the terminal's real cursor; while empty, the placeholder dim with the cursor on its first character |
+| `Table.view(head, rows)` | lipgloss' table: a normal border, the header bold over a rule, each column as wide as its widest cell by display width |
+| `Note.view(title, body)` | @clack/prompts' note: a green `◇` and the title on the top edge, the lines inside, closed on the rail with `├` |
 | `Pick`, `Yes`, `Field` | the state of a select (single or multi), a confirm and a text input, each with `.key(p, k)`, `.view(p)` and `.answer(p)`, drawn as @clack/prompts draws them: `◆` open, `◇` answered, `■` cancelled; `●`/`○` radios, `◼`/`◻` checkboxes, `● Yes / ○ No`; an answered prompt collapses to its title and its answer, dim |
 
 **Prompts** (`run.bend`), one call a question, each a `Cli.run` with raw
@@ -139,6 +142,8 @@ once), `Prompt.text(title, placeholder)` `Maybe<String>` (the placeholder
 when nothing is typed; Left, Right, Home, End, Backspace, Delete). Up/Down
 or k/j move, Enter answers, and Esc, Ctrl-C or the end of the input
 cancels: `None`, the prompt left with `■` and its value struck through.
+`Cli.print(v)` writes a view once, at the terminal's width and the
+stream's colour level, for what a CLI prints before or after its loops.
 
 A widget's rows are cut or padded to the area it gets; nothing overflows.
 `View.height(v, w)` is the rows a view takes at width `w` when nothing

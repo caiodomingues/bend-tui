@@ -16,8 +16,10 @@ def cancelled() -> IO(Unit):
 
 def named(n: Maybe<&2, String>) -> IO(Unit):
   match n:
-    case Some{s}:
-      IO.print("└  created " ++ s)
+    case Some{+s}:
+      do IO<Unit>:
+        R.Cli.print(U.Note.view("next steps", ["cd " ++ s, "ogw dev"]))
+        IO.print("└  created " ++ s)
     case None{}:
       cancelled()
 

@@ -453,3 +453,16 @@ def Prompt.text(title: String, placeholder: String) -> IO(Maybe<&2, String>):
   do IO<Maybe<&2, String>>:
     p : U.Field <- Cli.run(~U.Field, ~Unit, ~U.Cli{Field.screen, Field.update, U.Field.open}, U.Field.new(title, placeholder), Prompt.none, 80)
     return U.Field.answer(p)
+
+# a view written once, at the terminal's width and the stream's colour
+# level: for what a CLI prints before or after its loops
+def Cli.print.at(+v: U.View, +p: U.Pen, wh: U32 & U32) -> IO(Unit):
+  (w, h) = wh
+  IO.write(U.Lines.join(U.View.lines(p, v, U32.to_nat(w)), "\n"))
+
+def Cli.print(v: U.View) -> IO(Unit):
+  do IO<Unit>:
+    tty : Bool <- IOT.Tty.isatty(1)
+    l : C.Level <- IOT.Tty.level(1)
+    wh : U32 & U32 <- IOT.Tty.size()
+    Cli.print.at(v, U.Pen{l, tty}, wh)

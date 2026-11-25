@@ -2265,3 +2265,108 @@ def Field.answer(p: Field) -> Maybe<&2, String>:
   match p:
     case Field{title, +cs, cur, +placeholder, ask}:
       Bool.pick(Maybe<&2, String>, Ask.is_done(ask), Some{Field.text(cs, placeholder)}, None{})
+
+# Tables and notes
+# ----------------
+
+def Str.cols(s: String) -> Nat:
+  List.length(&2, Cell, Cell.text(C.Style.plain(), s))
+
+def Str.padto(+s: String, +w: Nat) -> String:
+  s ++ Str.repeat(Nat.sub(w, Str.cols(s)), " ")
+
+def Nats.maxed(a: List<&2, Nat>, b: List<&2, Nat>) -> List<&2, Nat>:
+  match a b:
+    case Nil{} y:
+      y
+    case x <> xt Nil{}:
+      x <> xt
+    case x <> xt y <> yt:
+      Nat.max(x, y) <> Nats.maxed(xt, yt)
+
+def Strs.cols(ss: List<&2, String>) -> List<&2, Nat>:
+  match ss:
+    case Nil{}:
+      Nil{}
+    case s <> t:
+      Str.cols(s) <> Strs.cols(t)
+
+def Table.widths(rows: List<&2, List<&2, String>>) -> List<&2, Nat>:
+  match rows:
+    case Nil{}:
+      Nil{}
+    case r <> t:
+      Nats.maxed(Strs.cols(r), Table.widths(t))
+
+def Table.cells(cs: List<&2, String>, ws: List<&2, Nat>) -> String:
+  match cs ws:
+    case Nil{} w:
+      ""
+    case c <> ct Nil{}:
+      ""
+    case c <> ct +w <> wt:
+      " " ++ Str.padto(c, w) ++ " │" ++ Table.cells(ct, wt)
+
+def Table.rule(ws: List<&2, Nat>, +mid: String) -> String:
+  match ws:
+    case Nil{}:
+      ""
+    case w <> t:
+      match t:
+        case Nil{}:
+          Str.repeat(2n+w, "─")
+        case u <> r:
+          Str.repeat(2n+w, "─") ++ mid ++ Table.rule(u <> r, mid)
+
+def Table.line(+gray: C.Style, s: String) -> View:
+  View.Txt{[Span.of(gray, s)], Wrap.Cut{X.Cut.End{}}}
+
+def Table.row(+gray: C.Style, +st: C.Style, cs: List<&2, String>, +ws: List<&2, Nat>) -> View:
+  View.Txt{[Span.of(gray, "│"), Span.of(st, Table.cells(cs, ws))], Wrap.Cut{X.Cut.End{}}}
+
+def Table.body(rows: List<&2, List<&2, String>>, +gray: C.Style, +ws: List<&2, Nat>) -> List<&2, View>:
+  match rows:
+    case Nil{}:
+      Nil{}
+    case r <> t:
+      Table.row(gray, C.Style.plain(), r, ws) <> Table.body(t, gray, ws)
+
+# a table with lipgloss' normal border: a header row, a rule under it,
+# a column as wide as its widest cell
+def Table.view(head: List<&2, String>, rows: List<&2, List<&2, String>>) -> View:
+  +hd = head
+  +rs = rows
+  +ws = Table.widths(hd <> rs)
+  +gray = Style.color(C.Color.gray())
+  Views.col(List.append(&2, View,
+    [Table.line(gray, "┌" ++ Table.rule(ws, "┬") ++ "┐"),
+     Table.row(gray, C.Style.bold(C.Style.plain()), hd, ws),
+     Table.line(gray, "├" ++ Table.rule(ws, "┼") ++ "┤")],
+    List.append(&2, View, Table.body(rs, gray, ws), [Table.line(gray, "└" ++ Table.rule(ws, "┴") ++ "┘")])))
+
+def Strs.widest(ss: List<&2, String>) -> Nat:
+  match ss:
+    case Nil{}:
+      0n
+    case s <> t:
+      Nat.max(Str.cols(s), Strs.widest(t))
+
+def Note.body(ls: List<&2, String>, +gray: C.Style, +w: Nat) -> List<&2, View>:
+  match ls:
+    case Nil{}:
+      Nil{}
+    case l <> t:
+      spans([Span.of(gray, "│"), Span.S{"  " ++ Str.padto(l, w) ++ "  "}, Span.of(gray, "│")]) <> Note.body(t, gray, w)
+
+# @clack/prompts' note: a green ◇ and the title on the top edge, the
+# lines inside, the box closed on the rail with ├
+def Note.view(title: String, body: List<&2, String>) -> View:
+  +t = title
+  +b = body
+  +w = Nat.max(Strs.widest(b), Str.cols(t))
+  +gray = Style.color(C.Color.gray())
+  +blank = spans([Span.of(gray, "│"), Span.S{Str.repeat(4n+w, " ")}, Span.of(gray, "│")])
+  Views.col(List.append(&2, View,
+    [spans([Span.of(Style.color(C.Color.green()), "◇"), Span.S{"  " ++ t ++ " "}, Span.of(gray, Str.repeat(Nat.sub(1n+w, Str.cols(t)), "─") ++ "╮")]),
+     blank],
+    List.append(&2, View, Note.body(b, gray, w), [blank, spans([Span.of(gray, "├" ++ Str.repeat(4n+w, "─") ++ "╯")])])))
