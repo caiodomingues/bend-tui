@@ -102,7 +102,7 @@ code) and `Style.inverse()` build `C.Style`s.
 | `Beside{left, right, cols}` / `After{left, right, cols}` | a split: `cols` for the left, or for the right |
 | `Split{left, right, num, den}` / `Stack{top, bottom, num, den}` | a split by ratio: `w * num / den` columns for the left, `h * num / den` rows for the top |
 | `Boxed{title, child}` | a border with the title on it; the child inside |
-| `Menu{items, sel}` | a row per item, item `sel` inverse, scrolled so that it is on screen |
+| `Menu{items, sel}` | a row per item, item `sel` after a `❯` and inverse (the pointer as ink-select-input draws it, so `NO_COLOR` still shows it), scrolled so that it is on screen |
 | `Input{text, cursor}` | one row; the cluster at `cursor` inverse |
 | `Progress{done, total, st}` | one row, filled `done / total` of the width |
 | `View.Txt{spans, wrap}` | styled text: `Wrap.Word{}` and `Wrap.Hard{}` wrap it to the width (bend-tty's `Ansi.wrap`), `Wrap.Cut{at}` keeps one row with an ellipsis (`Ansi.truncate`, `X.Cut.End{}`, `Start{}`, `Middle{}`); a `\n` breaks a line |
@@ -296,9 +296,9 @@ edits code points), a window for long selects (every item is shown), a
 sequence split across the `max` of a read, flex wrapping onto more lines,
 `min-content` sizes (a child shrinks to zero columns, not to its longest
 word). With stdout not a terminal, a prompt is not drawn while it is open
-(the loop draws nothing live there) but still reads keys; its summary comes
-at the end. Under `NO_COLOR`, a full-screen `Menu` or `Input` loses its
-inverse cell, the only thing that marks the selection.
+(the loop draws nothing live there, as Ink does when stdout is not a
+terminal) but still reads keys; its summary comes at the end. Under `NO_COLOR`, a full-screen `Input` loses its inverse cursor
+cell, as ink-text-input's does.
 
 ## Run
 

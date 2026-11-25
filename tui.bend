@@ -289,13 +289,17 @@ def lines(+st: C.Style, ls: List<&2, String>) -> List<&2, List<&2, Cell>>:
 def menu_top(+sel: Nat, +h: Nat) -> Nat:
   Bool.pick(Nat, Nat.is_lt(sel, h), 0n, 1n+Nat.sub(sel, h))
 
-# the menu's rows from item i on: the selected one inverse
+# the menu's rows from item i on: the selected one after a pointer, as
+# ink-select-input marks it, and inverse; the pointer alone still shows
+# it where no style is drawn (NO_COLOR)
 def menu_rows(items: List<&2, String>, +i: Nat, +sel: Nat) -> List<&2, List<&2, Cell>>:
   match items:
     case Nil{}:
       Nil{}
     case s <> t:
-      Cell.text(Bool.pick(C.Style, Nat.is_eq(i, sel), Style.inverse(), Style.plain()), s) <> menu_rows(t, 1n+i, sel)
+      +here = Nat.is_eq(i, sel)
+      List.append(&2, Cell, Cell.text(Style.plain(), Bool.pick(String, here, "❯ ", "  ")),
+        Cell.text(Bool.pick(C.Style, here, Style.inverse(), Style.plain()), s)) <> menu_rows(t, 1n+i, sel)
 
 def Cell.invert(c: Cell) -> Cell:
   match c:
@@ -777,7 +781,7 @@ def View.width(+v: View) -> Nat:
     case Boxed{title, child}:
       2n+Nat.max(View.width(child), List.length(&2, Cell, Cell.text(Style.plain(), title)))
     case Menu{items, sel}:
-      Lines.widest(Style.plain(), items)
+      2n+Lines.widest(Style.plain(), items)
     case Input{text, cursor}:
       1n+List.length(&2, Cell, Cell.text(Style.plain(), text))
     case Progress{done, total, st}:
