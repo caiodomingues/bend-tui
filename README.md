@@ -5,8 +5,8 @@ Terminal interfaces for [Bend](https://bend-lang.com) 2, on
 widgets; `render` lays it out into a frame of cells. Two loops draw it:
 `Tui.run`, a full-screen app on the alternate screen, and `Cli.run`, a
 command-line flow drawn inline under what the program printed, as Ink
-does. Requires Bend 2.0.40, as bend-tty does, and bend-tty's
-`Tty.inline` (branch `feat/inline-guard` until it is merged).
+does. Requires Bend 2.0.40, as bend-tty does, and bend-tty at `f57032b` or
+later, for `Tty.inline`.
 
 Some facts about every frame are theorems, not tests: it has exactly `h`
 rows, and every row has exactly `w` cells, for every view, size and state
