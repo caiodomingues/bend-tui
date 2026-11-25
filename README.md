@@ -63,6 +63,16 @@ generation per tick and every row in its own color: Space pauses, r reseeds,
 Esc quits. `demos/steps.bend` is a `Cli.run`: work that posts lines and
 progress, the lines printed once above a live spinner and bar, a summary
 left at the end; piped, the lines and the summary alone.
+`demos/install.bend` is what `ogw install` will look like:
+
+    ◇ ogw install 0.4.0
+    ✓ resolved 0.4.0 (engine 0.4.0, Bend 2.0.40, Bun 1.4.5)
+    ✓ downloaded 41.2 MB in 3.0 s
+    ◓ verifying sha256 ████████████░░░░░░░░ 60%
+
+and, when it ends, `└ installed in ~/.ogw/versions/0.4.0` in the live
+line's place. `demos/tasks.bend` is a listr2 task list with nested
+tasks, one failing; each top task is printed once as it finishes.
 
 ## API
 
@@ -105,6 +115,16 @@ wrapped or cut line keeps its colours and CJK and emoji measure as
 string-width says. Shorthands with Ink's defaults: `txt(s)`, `spans(sp)`,
 `Span.of(st, s)`, `Flex.of(v)` (grow 0, shrink 1, auto),
 `Flex.grow(v)`, `Row.of(kids)`, `Col.of(kids)` (no gap, start, stretch).
+
+**Components**, functions to views and small state types:
+
+| component | what |
+| --- | --- |
+| `Spinner.dots(tick)`, `Spinner.clack(tick)` | cli-spinners' `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` and clack's `◒◐◓◑`, a frame per tick (both are drawn at 80 ms) |
+| `Meter{done, total, on, off}` | a view: one row, `done / total` of it `█` in `on`, the rest `░` in `off` |
+| `Bar.view(label, done, total, cols, eta)` | a label, a bar of up to `cols` columns that gives way first when the row is narrow, the percentage, and an ETA string the program works out |
+| `Task{title, state, out, kids}` | listr2's task list: `Task.Wait{}` dim `◼`, `Task.Run{}` a yellow spinner (`❯` for a parent), `Task.Ok{}` green `✓`, `Task.Fail{msg}` red `✗` and `› msg`, `Task.Skip{msg}` yellow `↓`; `Task.view(tick, ts)` shows subtasks two columns in while their parent runs or when one failed, and a running task's `out` under it after `›`; `Task.put(ts, path, edit)` sets a state (`Task.To{st}`) or an output line (`Task.Say{s}`) at a path of sibling indexes |
+| `Badge.view(st, s)`, `Link.view(url, text)` | spans: ` s ` inverse in `st`; an OSC 8 link, `text (url)` where links are off |
 
 A widget's rows are cut or padded to the area it gets; nothing overflows.
 `View.height(v, w)` is the rows a view takes at width `w` when nothing
@@ -209,6 +229,12 @@ proofs, so it prints `SOME PROOFS FAIL` with its TODOs.
   shown; a resize to 50 columns mid-run redraws at the new width; a live
   frame of 30 lines in 24 rows shows its last 23, then all 30 once at the
   end. Piped, and with `NO_COLOR=1`, its output holds no ESC byte.
+  `demos/install.bend` at 40, 80 and 120 columns: at 80 and 120 the lines
+  above and the bar line as in the sample; at 40 a long line wraps under
+  its text, not under its mark, and the bar shrinks before the percentage
+  does; piped, with `NO_COLOR=1`, no ESC byte. `demos/tasks.bend`: the
+  running parent with `❯`, its subtasks in, the running one's output
+  under it; piped, a block per top task as it finishes.
 - **JS** (`bend demos/todo.bend -o todo.js` and `bun todo.js`): the same
   runs under bun 1.4.2, the same bytes for `steps` but for timing. bun, not
   node: bend-tty's read reaches libc through `bun:ffi`. A signal ends a JS
@@ -234,6 +260,8 @@ sizes (a child shrinks to zero columns, not to its longest word).
     bend demos/dashboard.bend -o dashboard && ./dashboard
     bend demos/life.bend -o life && ./life
     bend demos/steps.bend -o steps && ./steps     # and ./steps | cat
+    bend demos/install.bend -o install && ./install
+    bend demos/tasks.bend -o tasks && ./tasks
 
 Depends on `../bend-tty` (`tty.bend`, `color.bend` and `text.bend`, and
 `tty_io.bend` for the effects) and, for the proofs, `../bend-lemmas`:

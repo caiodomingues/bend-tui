@@ -217,6 +217,7 @@ type View is Data:
   Pad{t: Nat, r: Nat, b: Nat, l: Nat, child: View}                      # blank rows and columns around
   Border{line: Line, st: C.Style, title: List<&2, Span>, child: View}   # a border, its title on the top edge
   Sized{w: Size, h: Size, child: View}                                  # a width or height of its own
+  Meter{done: Nat, total: Nat, on: C.Style, off: C.Style}             # one row: a bar, done / total of it in on, the rest in off
 
 # Chalk-like text: a span's style applies to what it holds, an inner
 # style's set parts win and its unset ones inherit
@@ -621,12 +622,32 @@ def Txt.cut.if(+us: List<&2, X.Un>, +line: List<&2, Cell>, ell: Bool) -> List<&2
 def Txt.cut(+line: List<&2, Cell>, +us: List<&2, X.Un>) -> List<&2, List<&2, Cell>>:
   Txt.cut.if(us, line, Un.has_ell(us))
 
+# the blanks a line starts with: wrap-ansi trims them, Ink keeps them
+def Cells.lead(cs: List<&2, Cell>) -> Nat:
+  match cs:
+    case Nil{}:
+      0n
+    case +c <> t:
+      Bool.pick(Nat, Cell.is_eq(c, Cell.blank()), 1n+Cells.lead(t), 0n)
+
+def Rows.prefix(pre: List<&2, Cell>, rows: List<&2, List<&2, Cell>>) -> List<&2, List<&2, Cell>>:
+  match rows:
+    case Nil{}:
+      [pre]
+    case r <> t:
+      List.append(&2, Cell, pre, r) <> t
+
+# a line wrapped to w, its leading blanks kept on its first row
+def Txt.wrap.body(+line: List<&2, Cell>, +lead: Nat, +w: Nat, hard: Bool) -> List<&2, List<&2, Cell>>:
+  +body = List.drop(&2, Cell, line, lead)
+  Rows.prefix(List.take(&2, Cell, line, lead), Al.align(X.Ansi.units(X.Ansi.wrap(Cells.plain(body), U32.from_nat(Nat.sub(w, lead)), hard)), body))
+
 def Txt.wrap(+line: List<&2, Cell>, wrap: Wrap, +w: Nat) -> List<&2, List<&2, Cell>>:
   match wrap:
     case Wrap.Word{}:
-      Al.align(X.Ansi.units(X.Ansi.wrap(Cells.plain(line), U32.from_nat(w), False{})), line)
+      Txt.wrap.body(line, Nat.min(Cells.lead(line), w), w, False{})
     case Wrap.Hard{}:
-      Al.align(X.Ansi.units(X.Ansi.wrap(Cells.plain(line), U32.from_nat(w), True{})), line)
+      Txt.wrap.body(line, Nat.min(Cells.lead(line), w), w, True{})
     case Wrap.Cut{at}:
       Txt.cut(line, X.Ansi.units(X.Ansi.truncate(Cells.plain(line), U32.from_nat(w), at)))
 
@@ -725,6 +746,8 @@ def View.width(+v: View) -> Nat:
       2n+Nat.max(View.width(child), 4n+Cells.widest(Txt.lines(title)))
     case Sized{sw, sh, child}:
       Size.nat(sw, View.width(child))
+    case Meter{done, total, on, off}:
+      0n
 
 # The flex arithmetic. A container's children, in order: the sum of
 # their bases, of their grow factors, of shrink times basis (flexbox
@@ -899,6 +922,8 @@ def View.height.go(+v: View, +w: Nat, +cont: Cont) -> Nat:
       2n+View.height.go(child, Nat.sub(w, 2n), Cont.No{})
     case Sized{sw, sh, child}:
       Size.nat(sh, View.height.go(child, Nat.min(Size.of(sw, View.width(child), w), w), Cont.No{}))
+    case Meter{done, total, on, off}:
+      1n
 
 def View.height(+v: View, +w: Nat) -> Nat:
   View.height.go(v, w, Cont.No{})
@@ -1114,6 +1139,9 @@ def draw.go(+v: View, +w: Nat, +h: Nat, +cont: Cont) -> List<&2, List<&2, Cell>>
       +cw = Nat.min(Size.of(sw, View.width(child), w), w)
       +ch = Nat.min(Size.of(sh, h, h), h)
       fit_rows(ch, cw, draw.go(child, cw, ch, Cont.No{}))
+    case Meter{done, total, on, off}:
+      +n = Nat.div(Nat.mul(w, Nat.min(done, total)), Nat.max(total, 1n))
+      [List.append(&2, Cell, cells_of(n, 9608, on), cells_of(Nat.sub(w, n), 9617, off))]
 
 def draw(+v: View, +w: Nat, +h: Nat) -> List<&2, List<&2, Cell>>:
   draw.go(v, w, h, Cont.No{})
@@ -1150,6 +1178,201 @@ def View.pad(+n: Nat, v: View) -> View:
 # a margin is padding outside a border
 def View.margin(t: Nat, r: Nat, b: Nat, l: Nat, v: View) -> View:
   Pad{t, r, b, l, v}
+
+# Components
+# ----------
+# Functions to views, and small state types, a CLI composes; the looks
+# follow listr2 for tasks, cli-spinners and clack for spinners.
+
+def Style.color(c: C.Color) -> C.Style:
+  C.Style.fg(c, C.Style.plain())
+
+def Style.dim() -> C.Style:
+  C.Style.dim(C.Style.plain())
+
+def Str.nth(xs: List<&2, String>, n: Nat) -> String:
+  match xs:
+    case Nil{}:
+      ""
+    case x <> t:
+      match n:
+        case 0n:
+          x
+        case 1n+p:
+          Str.nth(t, p)
+
+def Str.repeat(n: Nat, +s: String) -> String:
+  match n:
+    case 0n:
+      ""
+    case 1n+p:
+      s ++ Str.repeat(p, s)
+
+# cli-spinners' dots, a frame per 80 ms tick
+def Spinner.dots(+tick: Nat) -> String:
+  Str.nth(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], Nat.mod(tick, 10n))
+
+# clack's spinner, a frame per 80 ms tick
+def Spinner.clack(+tick: Nat) -> String:
+  Str.nth(["◒", "◐", "◓", "◑"], Nat.mod(tick, 4n))
+
+def Bar.pct(+done: Nat, +total: Nat) -> String:
+  Nat.show(Nat.div(Nat.mul(100n, Nat.min(done, total)), Nat.max(total, 1n))) ++ "%"
+
+# a label, a bar of up to cols columns that gives way first when the
+# row is narrow, the percentage, and an ETA the program works out
+def Bar.view(label: List<&2, Span>, +done: Nat, +total: Nat, +cols: Nat, +eta: String) -> View:
+  Row.of([Flex{View.Txt{label, Wrap.Cut{X.Cut.End{}}}, 0n, 0n, Size.Auto{}},
+    Flex{Meter{done, total, Style.color(C.Color.cyan()), Style.color(C.Color.gray())}, 0n, 1n, Size.Cols{cols}},
+    Flex{txt(" " ++ Bar.pct(done, total)), 0n, 0n, Size.Auto{}},
+    Flex{View.Txt{[Span.of(Style.color(C.Color.gray()), Bool.pick(String, Str.same(eta, ""), "", " " ++ eta))], Wrap.Cut{X.Cut.End{}}}, 0n, 1n, Size.Auto{}}])
+
+def Badge.view(+st: C.Style, s: String) -> Span:
+  Span.of(C.Style.inverse(st), " " ++ s ++ " ")
+
+def Link.view(url: String, text: String) -> Span:
+  Span.Link{url, [Span.S{text}]}
+
+def Views.flex(vs: List<&2, View>) -> List<&2, Flex>:
+  match vs:
+    case Nil{}:
+      Nil{}
+    case v <> t:
+      Flex.of(v) <> Views.flex(t)
+
+def Views.col(vs: List<&2, View>) -> View:
+  Col.of(Views.flex(vs))
+
+# Tasks, as listr2 shows them: waiting, running with a spinner (a
+# parent with ❯), done ✓, failed ✗, skipped ↓; subtasks two columns in,
+# shown while their parent runs or when one of them failed; the last
+# output line of a running task under it after ›
+
+type Task.State is Data:
+  Task.Wait{}
+  Task.Run{}
+  Task.Ok{}
+  Task.Fail{msg: String}
+  Task.Skip{msg: String}
+
+type Task is Data:
+  Task{title: String, state: Task.State, out: String, kids: List<&2, Task>}
+
+type Task.Edit is Data:
+  Task.To{st: Task.State}
+  Task.Say{out: String}
+
+def Task.of(title: String) -> Task:
+  Task{title, Task.Wait{}, "", Nil{}}
+
+def Task.group(title: String, kids: List<&2, Task>) -> Task:
+  Task{title, Task.Wait{}, "", kids}
+
+def Task.failed(st: Task.State) -> Bool:
+  match st:
+    case Task.Fail{m}:
+      True{}
+    case other:
+      False{}
+
+def Task.any_fail(ts: List<&2, Task>) -> Bool:
+  match ts:
+    case Nil{}:
+      False{}
+    case Task{title, st, out, kids} <> t:
+      Bool.or(Task.failed(st), Bool.or(Task.any_fail(kids), Task.any_fail(t)))
+
+def Task.none(ts: List<&2, Task>) -> Bool:
+  match ts:
+    case Nil{}:
+      True{}
+    case t <> r:
+      False{}
+
+def Task.icon(+tick: Nat, st: Task.State, parent: Bool) -> Span:
+  match st:
+    case Task.Wait{}:
+      Span.of(Style.color(C.Color.gray()), "◼")
+    case Task.Run{}:
+      Span.of(Style.color(C.Color.yellow()), Bool.pick(String, parent, "❯", Spinner.dots(tick)))
+    case Task.Ok{}:
+      Span.of(Style.color(C.Color.green()), "✓")
+    case Task.Fail{m}:
+      Span.of(Style.color(C.Color.red()), "✗")
+    case Task.Skip{m}:
+      Span.of(Style.color(C.Color.yellow()), "↓")
+
+def Task.note(st: Task.State) -> List<&2, Span>:
+  match st:
+    case Task.Fail{+m}:
+      Bool.pick(List<&2, Span>, Str.same(m, ""), Nil{}, [Span.of(Style.color(C.Color.gray()), " › "), Span.of(Style.color(C.Color.red()), m)])
+    case Task.Skip{+m}:
+      [Span.of(Style.color(C.Color.gray()), Bool.pick(String, Str.same(m, ""), " skipped", " skipped: " ++ m))]
+    case other:
+      Nil{}
+
+def Task.shown(st: Task.State, +kids: List<&2, Task>) -> Bool:
+  match st:
+    case Task.Run{}:
+      True{}
+    case Task.Fail{m}:
+      True{}
+    case Task.Ok{}:
+      Task.any_fail(kids)
+    case other:
+      False{}
+
+def Task.is_run(st: Task.State) -> Bool:
+  match st:
+    case Task.Run{}:
+      True{}
+    case other:
+      False{}
+
+def Task.out(+ind: String, +st: Task.State, +out: String) -> List<&2, View>:
+  Bool.pick(List<&2, View>, Bool.and(Task.is_run(st), Bool.not(Str.same(out, ""))),
+    [View.Txt{[Span.S{ind ++ "  "}, Span.of(Style.color(C.Color.gray()), "› " ++ out)], Wrap.Cut{X.Cut.End{}}}], Nil{})
+
+def Task.rows(ts: List<&2, Task>, +tick: Nat, +depth: Nat) -> List<&2, View>:
+  match ts:
+    case Nil{}:
+      Nil{}
+    case Task{title, +st, +out, +kids} <> rest:
+      +ind = Str.repeat(depth, "  ")
+      View.Txt{List.append(&2, Span, [Span.S{ind}, Task.icon(tick, st, Bool.not(Task.none(kids))), Span.S{" " ++ title}], Task.note(st)), Wrap.Cut{X.Cut.End{}}}
+        <> List.append(&2, View, Task.out(ind, st, out),
+             List.append(&2, View, Bool.pick(List<&2, View>, Task.shown(st, kids), Task.rows(kids, tick, 1n+depth), Nil{}), Task.rows(rest, tick, depth)))
+
+def Task.view(+tick: Nat, ts: List<&2, Task>) -> View:
+  Views.col(Task.rows(ts, tick, 0n))
+
+def Task.edited(title: String, st: Task.State, out: String, kids: List<&2, Task>, e: Task.Edit) -> Task:
+  match e:
+    case Task.To{s}:
+      Task{title, s, out, kids}
+    case Task.Say{o}:
+      Task{title, st, o, kids}
+
+# the edit applied to the task at path: an index among siblings at each
+# depth, [0n, 2n] the third subtask of the first task
+def Task.put(ts: List<&2, Task>, path: List<&2, Nat>, +e: Task.Edit) -> List<&2, Task>:
+  match ts:
+    case Nil{}:
+      Nil{}
+    case Task{title, st, out, kids} <> rest:
+      match path:
+        case Nil{}:
+          Task{title, st, out, kids} <> rest
+        case i <> pt:
+          match i:
+            case 0n:
+              match pt:
+                case Nil{}:
+                  Task.edited(title, st, out, kids, e) <> rest
+                case q <> qt:
+                  Task{title, st, out, Task.put(kids, q <> qt, e)} <> rest
+            case 1n+p:
+              Task{title, st, out, kids} <> Task.put(rest, p <> pt, e)
 
 # Frames to strings
 # -----------------
