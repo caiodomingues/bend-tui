@@ -137,6 +137,10 @@ def Cli.work(-Msg: Data, +ch: Chan(U.Ev<Msg>), work: Chan(U.Ev<Msg>) -> IO(Unit)
     r : Result<&1, &1, U.Ev<Msg>, Unit> <- Chan.send(U.Ev<Msg>, ch, U.Ev.Done{})
     IO.pure(Unit, Unit{})
 
+# The exit code of a flow the person cancelled (Esc or Ctrl-C on a prompt): 130, what a shell
+# reports for a SIGINT, so a script or CI tells a cancel from a success. A CLI exits with it.
+def Cli.cancelled_code() -> U32: 130
+
 # no work: for a loop that only asks
 def Cli.none(-Msg: Data, ch: Chan(U.Ev<Msg>)) -> IO(Unit):
   IO.pure(Unit, Unit{})

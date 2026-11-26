@@ -70,13 +70,15 @@ left at the end; piped, the lines and the summary alone.
     ✓ downloaded 41.2 MB in 3.0 s
     ◓ verifying sha256 ████████████░░░░░░░░ 60%
 
-and, when it ends, `└ installed in ~/.ogw/versions/0.4.0` in the live
-line's place. `demos/tasks.bend` is a listr2 task list with nested
-tasks, one failing; each top task is printed once as it finishes.
+then `✓ verified sha256 9f2c1e7b…4a0d` printed once the check ends, and,
+when it ends, `└ installed in ~/.ogw/versions/0.4.0` in the live line's
+place. `demos/tasks.bend` is a listr2 task list with nested tasks, one
+failing; each top task is printed once as it finishes, and the run exits
+1, as a CLI must when a task failed.
 `demos/prompts.bend` asks what `ogw new` will ask: a template (select),
 features (multi-select), whether to install (confirm) and a name (text,
 placeholder `my-game`), then prints a note with the next steps; a cancel
-ends the flow.
+ends the flow and exits with `Cli.cancelled_code()`.
 
 ## API
 
@@ -144,6 +146,9 @@ or k/j move, Enter answers, and Esc, Ctrl-C or the end of the input
 cancels: `None`, the prompt left with `■` and its value struck through.
 `Cli.print(v)` writes a view once, at the terminal's width and the
 stream's colour level, for what a CLI prints before or after its loops.
+`Cli.cancelled_code()` is 130, what a shell reports for a SIGINT: a flow the
+person cancelled exits with it, so a script or CI tells a cancel from a
+success.
 
 A widget's rows are cut or padded to the area it gets; nothing overflows.
 `View.height(v, w)` is the rows a view takes at width `w` when nothing
@@ -264,13 +269,13 @@ reflow on resize), not in a real terminal; macOS was not tried.
   `FORCE_COLOR=3 | cat` writes colours and no cursor movement; piped, no
   ESC byte. `demos/tasks.bend`: the running parent with `❯`, its subtasks
   in, the running one's output under it; piped, a block per top task as it
-  finishes. `demos/prompts.bend` driven by keys: Down and Enter, Space,
+  finishes; exit 1, since a task failed. `demos/prompts.bend` driven by keys: Down and Enter, Space,
   Down, Down, Space and Enter, `n`, then `games`, Backspace, Left, `X` and
   Enter answer platformer; physics, networking; No; gamXe, each left
   collapsed; the real cursor sits on the placeholder's first character,
   then after `gamX`; Ctrl-C in the first prompt and Esc in the second end
-  the flow with `■` and `└  cancelled`; with stdin at `/dev/null` the first
-  prompt cancels; under `NO_COLOR=1` the multi-select's row under the
+  the flow with `■` and `└  cancelled` and exit 130; with stdin at `/dev/null`
+  the first prompt cancels and the demo exits 130; under `NO_COLOR=1` the multi-select's row under the
   cursor shows `›`. A link is OSC 8 under a pty and `text (url)` piped. A
   loop ended by a key while its work still posts exits 0.
 - **JS** (`bend demos/todo.bend -o todo.js` and `bun todo.js`), bun 1.4.2:

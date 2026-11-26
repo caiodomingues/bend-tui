@@ -12,8 +12,9 @@ import ../../bend-tty/tty.bend as T
 import ../tui.bend as U
 import ../run.bend as R
 
+# failed: a task that already moved above had failed
 type St is Data:
-  St{done: List<&2, U.View>, live: List<&2, U.Task>, tick: Nat}
+  St{done: List<&2, U.View>, live: List<&2, U.Task>, tick: Nat, failed: Bool}
 
 type Msg is Data:
   Msg.Edit{path: List<&2, Nat>, e: U.Task.Edit}
@@ -27,30 +28,30 @@ def tasks() -> List<&2, U.Task>:
 
 def view(s: St) -> U.Screen:
   match s:
-    case St{done, live, +tick}:
+    case St{done, live, +tick, _}:
       U.Screen{done, U.Task.view(tick, live)}
 
 # the first live task, final now, moves above
-def St.seal(done: List<&2, U.View>, live: List<&2, U.Task>, +tick: Nat) -> St:
+def St.seal(done: List<&2, U.View>, live: List<&2, U.Task>, +tick: Nat, failed: Bool) -> St:
   match live:
     case Nil{}:
-      St{done, Nil{}, tick}
-    case t <> rest:
-      St{List.append(&2, U.View, done, [U.Task.view(tick, [t])]), rest, tick}
+      St{done, Nil{}, tick, failed}
+    case +t <> rest:
+      St{List.append(&2, U.View, done, [U.Task.view(tick, [t])]), rest, tick, Bool.or(failed, U.Task.any_fail([t]))}
 
 def St.msg(s: St, m: Msg) -> St:
   match s:
-    case St{done, live, tick}:
+    case St{done, live, tick, failed}:
       match m:
         case Msg.Edit{path, e}:
-          St{done, U.Task.put(live, path, e), tick}
+          St{done, U.Task.put(live, path, e), tick, failed}
         case Msg.Seal{}:
-          St.seal(done, live, tick)
+          St.seal(done, live, tick, failed)
 
 def St.tick(s: St) -> St:
   match s:
-    case St{done, live, tick}:
-      St{done, live, 1n+tick}
+    case St{done, live, tick, failed}:
+      St{done, live, 1n+tick, failed}
 
 def update(e: U.Ev<Msg>, s: St) -> U.Step<St>:
   match e:
@@ -123,7 +124,20 @@ def work(c: Chan(U.Ev<Msg>)) -> IO(Unit):
     to(ch, [0n], U.Task.Skip{"upload failed"})
     seal(ch)
 
+# A run with a failed task ends with exit code 1, so a script or CI sees the failure.
+def ended.go(failed: Bool) -> IO(Unit):
+  match failed:
+    case True{}:
+      IO.exit(1)
+    case False{}:
+      IO.pure(Unit, Unit{})
+
+def ended(s: St) -> IO(Unit):
+  match s:
+    case St{done, live, tick, failed}:
+      ended.go(Bool.or(failed, U.Task.any_fail(live)))
+
 def main() -> IO(Unit):
   do IO<Unit>:
-    s : St <- R.Cli.run(~St, ~Msg, ~U.Cli{view, update, no_keys}, St{Nil{}, tasks(), 0n}, work, 80)
-    IO.pure(Unit, Unit{})
+    s : St <- R.Cli.run(~St, ~Msg, ~U.Cli{view, update, no_keys}, St{Nil{}, tasks(), 0n, False{}}, work, 80)
+    ended(s)
