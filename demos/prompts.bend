@@ -12,7 +12,9 @@ import ../tui.bend as U
 import ../run.bend as R
 
 def cancelled() -> IO(Unit):
-  IO.print("└  cancelled")
+  do IO<Unit>:
+    IO.print("└  cancelled")
+    IO.exit(R.Cli.cancelled_code())
 
 def named(n: Maybe<&2, String>) -> IO(Unit):
   match n:

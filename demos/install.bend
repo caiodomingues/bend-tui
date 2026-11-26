@@ -126,6 +126,7 @@ def fetched(+ch: Chan(U.Ev<Msg>), +t0: Nat, +t1: Nat) -> IO(Unit):
     post(ch, Msg.Log{ok([U.Span.S{"downloaded 41.2 MB "}, U.Span.of(gray(), "in " ++ elapsed(t0, t1))])})
     post(ch, Msg.Phase{Phase.Verify{}, 100n})
     steps(20n, ch, 1n, 5n, 70)
+    post(ch, Msg.Log{ok([U.Span.S{"verified sha256 "}, U.Span.of(gray(), "9f2c1e7b…4a0d")])})
 
 def work(c: Chan(U.Ev<Msg>)) -> IO(Unit):
   +ch = c
